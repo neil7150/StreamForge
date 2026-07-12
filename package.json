@@ -1,0 +1,13 @@
+{
+  "name": "streamforge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StreamForge — Legal Torrent Streaming Platform",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/desktop",
+    "build": "npm run build --workspace=apps/desktop"
+  }
+}

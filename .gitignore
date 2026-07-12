@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+build/
+
+# Electron
+apps/desktop/out/
+apps/desktop/dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+.turbo/
+
+# C++ build artifacts
+apps/desktop/native/build/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+
+# Go
+services/*/tmp/
+vendor/
+
+# Docker
+.docker/
+
+# Test coverage
+coverage/
+*.lcov

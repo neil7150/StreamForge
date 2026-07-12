@@ -1,0 +1,14 @@
+# Auth Service
+FROM golang:1.22-alpine AS builder
+WORKDIR /build
+COPY pkg/ ./pkg/
+COPY services/auth/ ./services/auth/
+COPY go.work ./
+RUN cd services/auth && go build -o /app/server ./cmd/server
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /app/server /app/server
+COPY services/auth/db/migrations /app/migrations
+EXPOSE 8001
+CMD ["/app/server"]
