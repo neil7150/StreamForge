@@ -2,20 +2,21 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"streamforge/pkg/cache"
-	"streamforge/pkg/database"
-	"streamforge/pkg/logger"
-	pkgmw "streamforge/pkg/middleware"
+	pkgauth "streamforge.local/pkg/auth"
+	"streamforge.local/pkg/cache"
+	"streamforge.local/pkg/database"
+	"streamforge.local/pkg/logger"
+	pkgmw "streamforge.local/pkg/middleware"
 
 	"streamforge/services/content/internal/config"
 	"streamforge/services/content/internal/handler"
@@ -25,9 +26,9 @@ import (
 
 func main() {
 	cfg := config.Load()
-	log := logger.New(cfg.LogLevel, cfg.Env)
+	log := logger.New(cfg.LogLevel, cfg.AppEnv)
 
-	log.Info().Str("port", cfg.Port).Str("env", cfg.Env).Msg("Starting Content Service")
+	log.Info().Str("port", cfg.Port).Str("env", cfg.AppEnv).Msg("Starting Content Service")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -41,7 +42,7 @@ func main() {
 	log.Info().Msg("Connected to PostgreSQL")
 
 	// ── Run migrations ────────────────────────────────────
-	if err := runMigrations(pool); err != nil {
+	if err := runMigrations(cfg.DatabaseURL); err != nil {
 		log.Warn().Err(err).Msg("Migration warning (may already be applied)")
 	}
 
@@ -52,6 +53,13 @@ func main() {
 	}
 	defer rdb.Close()
 	log.Info().Msg("Connected to Redis")
+
+	authRDB, err := cache.Connect(ctx, cfg.AuthRedisURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to auth Redis")
+	}
+	defer authRDB.Close()
+	tokenBlacklist := pkgauth.NewRedisTokenBlacklist(authRDB)
 
 	// ── Initialize layers ─────────────────────────────────
 	movieRepo := repository.NewMovieRepository(pool)
@@ -72,12 +80,14 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
+			message := "Internal server error"
 			if e, ok := err.(*fiber.Error); ok {
 				code = e.Code
+				message = e.Message
 			}
 			return c.Status(code).JSON(fiber.Map{
 				"success": false,
-				"error":   fiber.Map{"code": "INTERNAL_ERROR", "message": err.Error()},
+				"error":   fiber.Map{"code": "INTERNAL_ERROR", "message": message},
 			})
 		},
 	})
@@ -88,9 +98,13 @@ func main() {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "content"})
 	})
+	app.Get("/metrics", func(c *fiber.Ctx) error {
+		c.Type("txt")
+		return c.SendString("# HELP streamforge_up Whether the service is running.\n# TYPE streamforge_up gauge\nstreamforge_up{service=\"content\"} 1\n")
+	})
 
 	// Register routes
-	handler.SetupRoutes(app, movieHandler, genreHandler, cfg.JWTSecret)
+	handler.SetupRoutes(app, movieHandler, genreHandler, cfg.JWTSecret, tokenBlacklist)
 
 	// ── Start server ──────────────────────────────────────
 	go func() {
@@ -112,16 +126,15 @@ func main() {
 	}
 }
 
-func runMigrations(pool *pgxpool.Pool) error {
-	ctx := context.Background()
-	migrationSQL, err := os.ReadFile("db/migrations/001_create_content.up.sql")
+func runMigrations(databaseURL string) error {
+	m, err := migrate.New("file://db/migrations", databaseURL)
 	if err != nil {
-		// Try alternative path (Docker)
-		migrationSQL, err = os.ReadFile("/app/migrations/001_create_content.up.sql")
-		if err != nil {
-			return fmt.Errorf("read migration file: %w", err)
-		}
+		return err
 	}
-	_, err = pool.Exec(ctx, string(migrationSQL))
-	return err
+	defer m.Close()
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+	return nil
 }

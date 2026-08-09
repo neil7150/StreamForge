@@ -11,6 +11,7 @@ type Config struct {
 	Port           string
 	DatabaseURL    string
 	RedisURL       string
+	AuthRedisURL   string
 	JWTSecret      string
 	MinioEndpoint  string
 	MinioAccessKey string
@@ -25,7 +26,8 @@ func Load() Config {
 		Port:           getEnv("PORT", "8082"),
 		DatabaseURL:    getEnv("DATABASE_URL", "postgres://streamforge:streamforge@localhost:5432/content?sslmode=disable"),
 		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379/1"),
-		JWTSecret:      getEnv("JWT_SECRET", ""),
+		AuthRedisURL:   getEnv("AUTH_REDIS_URL", "redis://localhost:6379/0"),
+		JWTSecret:      getEnv("JWT_SECRET", "dev-secret-change-in-production"),
 		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
 		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", ""),
 		MinioSecretKey: getEnv("MINIO_SECRET_KEY", ""),

@@ -1,4 +1,4 @@
-module streamforge/pkg
+module streamforge.local/pkg
 
 go 1.22
 

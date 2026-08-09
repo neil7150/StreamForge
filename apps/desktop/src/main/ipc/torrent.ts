@@ -22,18 +22,19 @@
 import { ipcMain, shell, type BrowserWindow } from 'electron'
 import type { TorrentManager, TorrentInfo, TorrentProgress } from '../torrent/manager'
 import type { StreamServer } from '../torrent/stream-server'
+import { requireFileIndex, requireFiniteNumber, requireInfoHash, requireMagnetURI } from './validation'
 
 export function setupTorrentIPC(
   mainWindow: BrowserWindow,
   torrentManager: TorrentManager,
-  _streamServer: StreamServer
+  streamServer: StreamServer
 ): void {
   // ─── Request/Response handlers ───────────────────────────────────
 
   /** Add a torrent in STREAM mode (ephemeral). */
   ipcMain.handle('torrent:add', async (_event, magnetURI: string) => {
     try {
-      const info = await torrentManager.addTorrent(magnetURI)
+      const info = await torrentManager.addTorrent(requireMagnetURI(magnetURI))
       return info
     } catch (error) {
       console.error('[IPC torrent:add] Error:', (error as Error).message)
@@ -44,7 +45,7 @@ export function setupTorrentIPC(
   /** Add a torrent in DOWNLOAD mode (persistent). */
   ipcMain.handle('torrent:add-download', async (_event, magnetURI: string) => {
     try {
-      const info = await torrentManager.addDownload(magnetURI)
+      const info = await torrentManager.addDownload(requireMagnetURI(magnetURI))
       return info
     } catch (error) {
       console.error('[IPC torrent:add-download] Error:', (error as Error).message)
@@ -55,7 +56,9 @@ export function setupTorrentIPC(
   /** Remove and destroy a torrent by info hash. */
   ipcMain.handle('torrent:remove', async (_event, infoHash: string) => {
     try {
-      torrentManager.removeTorrent(infoHash)
+      const hash = requireInfoHash(infoHash)
+      streamServer.clearProbeCache(hash)
+      await torrentManager.removeTorrent(hash)
     } catch (error) {
       console.error('[IPC torrent:remove] Error:', (error as Error).message)
       throw error
@@ -65,7 +68,9 @@ export function setupTorrentIPC(
   /** Cleanup a stream torrent — destroy + delete temp files. */
   ipcMain.handle('torrent:cleanup-stream', async (_event, infoHash: string) => {
     try {
-      await torrentManager.cleanupStream(infoHash)
+      const hash = requireInfoHash(infoHash)
+      streamServer.clearProbeCache(hash)
+      await torrentManager.cleanupStream(hash)
     } catch (error) {
       console.error('[IPC torrent:cleanup-stream] Error:', (error as Error).message)
       throw error
@@ -105,10 +110,25 @@ export function setupTorrentIPC(
   /** Get the stream URL for a torrent. */
   ipcMain.handle('torrent:stream-url', async (_event, infoHash: string) => {
     try {
-      return torrentManager.getStreamURL(infoHash)
+      return torrentManager.getStreamURL(requireInfoHash(infoHash))
     } catch (error) {
       console.error('[IPC torrent:stream-url] Error:', (error as Error).message)
       throw error
+    }
+  })
+
+  /** Get stable codec and duration metadata for the selected source file. */
+  ipcMain.handle('torrent:media-info', async (_event, infoHash: string) => {
+    try {
+      const hash = requireInfoHash(infoHash)
+      const info = await streamServer.getMediaInfo(hash)
+      console.log(
+        `[IPC torrent:media-info] ${infoHash}: duration=${info?.duration ?? 0}s transcode=${info?.needsTranscode ?? false}`
+      )
+      return info
+    } catch (error) {
+      console.error('[IPC torrent:media-info] Error:', (error as Error).message)
+      return null
     }
   })
 
@@ -117,7 +137,9 @@ export function setupTorrentIPC(
     'torrent:select-file',
     async (_event, infoHash: string, fileIndex: number) => {
       try {
-        return torrentManager.selectFile(infoHash, fileIndex)
+        const hash = requireInfoHash(infoHash)
+        streamServer.clearProbeCache(hash)
+        return torrentManager.selectFile(hash, requireFileIndex(fileIndex))
       } catch (error) {
         console.error('[IPC torrent:select-file] Error:', (error as Error).message)
         throw error
@@ -130,9 +152,28 @@ export function setupTorrentIPC(
     'torrent:seek',
     async (_event, infoHash: string, positionPercent: number) => {
       try {
-        torrentManager.notifySeek(infoHash, positionPercent)
+        torrentManager.notifySeek(
+          requireInfoHash(infoHash),
+          requireFiniteNumber(positionPercent, 'seek position', 0, 1)
+        )
       } catch (error) {
         console.error('[IPC torrent:seek] Error:', (error as Error).message)
+        throw error
+      }
+    }
+  )
+  /** Update the rolling stream window from the video playhead. */
+  ipcMain.handle(
+    'torrent:playback-position',
+    async (_event, infoHash: string, currentTime: number, duration: number) => {
+      try {
+        torrentManager.updatePlaybackPosition(
+          requireInfoHash(infoHash),
+          requireFiniteNumber(currentTime, 'playback time', 0, 604_800),
+          requireFiniteNumber(duration, 'media duration', 0.001, 604_800)
+        )
+      } catch (error) {
+        console.error('[IPC torrent:playback-position] Error:', (error as Error).message)
         throw error
       }
     }
@@ -151,6 +192,11 @@ export function setupTorrentIPC(
   // ─── Forward TorrentManager events to the renderer ─────────────────
 
   torrentManager.on('torrent:ready', (info: TorrentInfo) => {
+    if (info.mode === 'stream') {
+      void streamServer.getMediaInfo(info.infoHash).catch((error) => {
+        console.warn(`[IPC] Media prewarm failed for ${info.infoHash}:`, error)
+      })
+    }
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('torrent:ready', info)
     }

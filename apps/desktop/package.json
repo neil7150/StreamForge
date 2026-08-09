@@ -12,6 +12,10 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-isolation=none tests/stream-policy.test.ts tests/validation.test.ts tests/provider-policy.test.ts tests/provider-resilience.test.ts tests/peer-transport-policy.test.ts tests/playback-diagnostics.test.ts tests/playback-resume.test.ts",
+    "test:compatibility": "node tests/run-media-compatibility.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "build:verify": "npm run test && npm run test:compatibility && npm run typecheck && npm run build:unpack && npm run verify:package",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -51,14 +55,14 @@
       "buildResources": "resources"
     },
     "files": [
-      "out/**/*",
-      "!node_modules/**/*"
+      "out/**/*"
     ],
     "win": {
       "target": [
         "nsis"
       ],
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [
@@ -75,6 +79,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "electronVersion": "33.4.11",
+    "npmRebuild": false
   }
 }

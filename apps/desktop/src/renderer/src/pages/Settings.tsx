@@ -1,176 +1,67 @@
-import { useEffect, useState, useCallback } from 'react'
-import {
-  HardDrive,
-  Trash2,
-  MonitorPlay,
-  Palette,
-  Info,
-  Loader2,
-  CheckCircle2,
-  ExternalLink
-} from 'lucide-react'
+﻿import { useEffect, useState, useCallback } from 'react'
+import { Check, HardDrive, Info, Loader2, Trash2 } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 import { formatBytes } from '../lib/utils'
 
 export default function Settings() {
-  const cacheSize = useAppStore((s) => s.cacheSize)
-  const refreshCacheSize = useAppStore((s) => s.refreshCacheSize)
-
+  const cacheSize = useAppStore((state) => state.cacheSize)
+  const refreshCacheSize = useAppStore((state) => state.refreshCacheSize)
   const [clearing, setClearing] = useState(false)
-  const [cleared, setCleared] = useState(false)
-  const [defaultQuality, setDefaultQuality] = useState('auto')
+  const [message, setMessage] = useState<string | null>(null)
 
-  useEffect(() => {
-    refreshCacheSize()
-  }, [refreshCacheSize])
+  useEffect(() => { void refreshCacheSize() }, [refreshCacheSize])
 
-  const handleClearCache = useCallback(async () => {
-    setClearing(true)
-    setCleared(false)
+  const clearCache = useCallback(async () => {
+    setClearing(true); setMessage(null)
     try {
+      if (!window.torrentAPI) return
       await window.torrentAPI.clearCache()
       await refreshCacheSize()
-      setCleared(true)
-      setTimeout(() => setCleared(false), 2000)
+      setMessage('Temporary cache cleared')
     } catch {
-      // Silently fail
-    } finally {
-      setClearing(false)
-    }
+      setMessage('The cache could not be cleared. Close active streams and try again.')
+    } finally { setClearing(false) }
   }, [refreshCacheSize])
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto p-6 animate-[fade-in_0.3s_ease-out]">
-      <h1 className="mb-6 text-xl font-bold text-[var(--color-text-primary)]">Settings</h1>
+    <div className="h-full overflow-y-auto">
+      <main className="mx-auto w-full max-w-[860px] px-10 pb-14 pt-9">
+        <header><h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Settings</h1><p className="mt-1.5 text-[11px] text-white/32">Storage and playback information.</p></header>
 
-      <div className="mx-auto w-full max-w-2xl space-y-4">
-        {/* ===== CACHE ===== */}
-        <div className="glass rounded-xl p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <HardDrive className="h-4 w-4 text-[var(--color-accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Cache</h2>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[var(--color-text-secondary)]">Current cache size</p>
-              <p className="text-2xl font-bold text-[var(--color-text-primary)]">
-                {formatBytes(cacheSize)}
-              </p>
-            </div>
-
-            <button
-              onClick={handleClearCache}
-              disabled={clearing || cacheSize === 0}
-              className="flex items-center gap-2 rounded-lg bg-[var(--color-danger)]/10 px-4 py-2.5 text-sm font-medium text-[var(--color-danger)] transition-all duration-200 hover:bg-[var(--color-danger)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {clearing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : cleared ? (
-                <CheckCircle2 className="h-4 w-4 text-[var(--color-success)]" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-              {cleared ? 'Cleared!' : 'Clear Cache'}
-            </button>
-          </div>
-        </div>
-
-        {/* ===== PLAYBACK ===== */}
-        <div className="glass rounded-xl p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <MonitorPlay className="h-4 w-4 text-[var(--color-accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Playback</h2>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[var(--color-text-secondary)]">Default quality</p>
-              <p className="text-xs text-[var(--color-text-muted)]">
-                Applied when multiple quality options are available
-              </p>
-            </div>
-
-            <select
-              value={defaultQuality}
-              onChange={(e) => setDefaultQuality(e.target.value)}
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-hover)] focus:border-[var(--color-accent)]"
-            >
-              <option value="auto">Auto</option>
-              <option value="1080p">1080p</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
-            </select>
-          </div>
-        </div>
-
-        {/* ===== APPEARANCE ===== */}
-        <div className="glass rounded-xl p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <Palette className="h-4 w-4 text-[var(--color-accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Appearance</h2>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[var(--color-text-secondary)]">Theme</p>
-              <p className="text-xs text-[var(--color-text-muted)]">
-                More themes coming soon
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
-              <span className="h-3 w-3 rounded-full bg-[var(--color-bg-primary)] ring-1 ring-[var(--color-border)]" />
-              Dark
+        <section className="mt-9">
+          <h2 className="text-[11px] font-semibold text-white/48">Storage</h2>
+          <div className="mt-3 divide-y divide-white/[0.055] border-y border-white/[0.06]">
+            <div className="flex items-center gap-4 py-5">
+              <HardDrive className="h-4 w-4 text-white/25" />
+              <div className="min-w-0 flex-1"><p className="text-[12px] font-medium text-white/67">Temporary streaming cache</p><p className="mt-1 text-[10px] text-white/27">Watched pieces are removed automatically around the playback window.</p></div>
+              <span className="text-[12px] font-medium text-white/55">{formatBytes(cacheSize)}</span>
+              <button onClick={() => void clearCache()} disabled={clearing || cacheSize === 0} className="flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.09] px-3 text-[10px] text-white/40 hover:bg-white/[0.05] hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-30">{clearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Clear</button>
             </div>
           </div>
-        </div>
+          {message && <p className="mt-3 text-[10px] text-white/40">{message}</p>}
+        </section>
 
-        {/* ===== ABOUT ===== */}
-        <div className="glass rounded-xl p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <Info className="h-4 w-4 text-[var(--color-accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">About</h2>
+        <section className="mt-9">
+          <h2 className="text-[11px] font-semibold text-white/48">Playback</h2>
+          <div className="mt-3 divide-y divide-white/[0.055] border-y border-white/[0.06]">
+            {[
+              ['Direct playback', 'H.264, AAC, WebM'],
+              ['Compatibility mode', 'HEVC, AC3, DTS'],
+              ['Subtitles', 'Embedded and sidecar tracks'],
+              ['Storage policy', 'Temporary and local']
+            ].map(([label, value]) => (
+              <div key={label} className="flex items-center py-4"><Check className="mr-4 h-3.5 w-3.5 text-teal-300/70" /><span className="flex-1 text-[11px] text-white/58">{label}</span><span className="text-[10px] text-white/28">{value}</span></div>
+            ))}
           </div>
+        </section>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-[var(--color-text-secondary)]">Version</p>
-              <span className="rounded-md bg-[var(--color-bg-tertiary)] px-2.5 py-1 text-xs font-mono text-[var(--color-text-primary)]">
-                1.0.0-beta
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-[var(--color-text-secondary)]">Built with</p>
-              <span className="text-xs text-[var(--color-text-muted)]">
-                Electron · React · WebTorrent
-              </span>
-            </div>
-
-            <div className="flex items-center gap-3 pt-2 border-t border-[var(--color-border)]">
-              <a
-                href="#"
-                className="flex items-center gap-1 text-xs text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
-              >
-                GitHub <ExternalLink className="h-3 w-3" />
-              </a>
-              <a
-                href="#"
-                className="flex items-center gap-1 text-xs text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
-              >
-                License <ExternalLink className="h-3 w-3" />
-              </a>
-              <a
-                href="#"
-                className="flex items-center gap-1 text-xs text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
-              >
-                Report Bug <ExternalLink className="h-3 w-3" />
-              </a>
-            </div>
+        <section className="mt-9">
+          <h2 className="text-[11px] font-semibold text-white/48">About</h2>
+          <div className="mt-3 flex items-center border-y border-white/[0.06] py-4">
+            <Info className="mr-4 h-4 w-4 text-white/24" /><div className="flex-1"><p className="text-[11px] text-white/58">StreamForge Desktop</p><p className="mt-1 text-[9px] text-white/24">Electron · React · WebTorrent · FFmpeg</p></div><span className="font-mono text-[9px] text-white/28">0.1.0</span>
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   )
 }

@@ -2,12 +2,14 @@ package handler
 
 import (
 	"strconv"
+	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"streamforge/pkg/response"
+	"streamforge.local/pkg/response"
 	"streamforge/services/content/internal/dto"
 	"streamforge/services/content/internal/model"
 	"streamforge/services/content/internal/service"
@@ -15,13 +17,14 @@ import (
 
 // MovieHandler handles HTTP requests for movies.
 type MovieHandler struct {
-	svc *service.ContentService
-	log zerolog.Logger
+	svc      *service.ContentService
+	log      zerolog.Logger
+	validate *validator.Validate
 }
 
 // NewMovieHandler creates a new MovieHandler.
 func NewMovieHandler(svc *service.ContentService, log zerolog.Logger) *MovieHandler {
-	return &MovieHandler{svc: svc, log: log}
+	return &MovieHandler{svc: svc, log: log, validate: validator.New()}
 }
 
 // ListMovies handles GET /api/v1/movies
@@ -47,7 +50,7 @@ func (h *MovieHandler) ListMovies(c *fiber.Ctx) error {
 
 	results := make([]dto.MovieResponse, len(movies))
 	for i, m := range movies {
-		results[i] = dto.ToMovieResponse(m, len(m.MagnetLinks))
+		results[i] = dto.ToMovieResponse(m, h.svc.GetMagnetCount(c.Context(), m.ID))
 	}
 
 	return response.Paginated(c, results, page, perPage, total)
@@ -126,7 +129,7 @@ func (h *MovieHandler) GetTrending(c *fiber.Ctx) error {
 
 	results := make([]dto.MovieResponse, len(movies))
 	for i, m := range movies {
-		results[i] = dto.ToMovieResponse(m, len(m.MagnetLinks))
+		results[i] = dto.ToMovieResponse(m, h.svc.GetMagnetCount(c.Context(), m.ID))
 	}
 
 	return response.OK(c, results)
@@ -147,7 +150,7 @@ func (h *MovieHandler) GetRecent(c *fiber.Ctx) error {
 
 	results := make([]dto.MovieResponse, len(movies))
 	for i, m := range movies {
-		results[i] = dto.ToMovieResponse(m, len(m.MagnetLinks))
+		results[i] = dto.ToMovieResponse(m, h.svc.GetMagnetCount(c.Context(), m.ID))
 	}
 
 	return response.OK(c, results)
@@ -161,11 +164,20 @@ func (h *MovieHandler) CreateMovie(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
+	if err := h.validate.Struct(req); err != nil {
+		return response.BadRequest(c, "Invalid movie data")
+	}
+
+	releaseDate, err := parseOptionalDate(req.ReleaseDate)
+	if err != nil {
+		return response.BadRequest(c, "Release date must use YYYY-MM-DD format")
+	}
 
 	movie := model.Movie{
 		Title:          req.Title,
 		Overview:       req.Overview,
 		Tagline:        req.Tagline,
+		ReleaseDate:    releaseDate,
 		RuntimeMinutes: req.RuntimeMinutes,
 		Language:       req.Language,
 		PosterURL:      req.PosterURL,
@@ -193,24 +205,42 @@ func (h *MovieHandler) UpdateMovie(c *fiber.Ctx) error {
 		return response.BadRequest(c, "Invalid movie ID")
 	}
 
-	var req dto.CreateMovieRequest
+	var req dto.UpdateMovieRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
+	if err := h.validate.Struct(req); err != nil {
+		return response.BadRequest(c, "Invalid movie data")
+	}
+
+	releaseDate, err := parseOptionalDate(req.ReleaseDate)
+	if err != nil {
+		return response.BadRequest(c, "Release date must use YYYY-MM-DD format")
+	}
 
 	movie := model.Movie{
-		Title:          req.Title,
 		Overview:       req.Overview,
 		Tagline:        req.Tagline,
+		ReleaseDate:    releaseDate,
 		RuntimeMinutes: req.RuntimeMinutes,
-		Language:       req.Language,
 		PosterURL:      req.PosterURL,
 		BackdropURL:    req.BackdropURL,
 		TrailerURL:     req.TrailerURL,
 		ImdbID:         req.ImdbID,
 		ContentRating:  req.ContentRating,
-		LicenseType:    req.LicenseType,
 		LicenseURL:     req.LicenseURL,
+	}
+	if req.Title != nil {
+		movie.Title = *req.Title
+	}
+	if req.Language != nil {
+		movie.Language = *req.Language
+	}
+	if req.LicenseType != nil {
+		movie.LicenseType = *req.LicenseType
+	}
+	if req.Status != nil {
+		movie.Status = *req.Status
 	}
 
 	result, err := h.svc.UpdateMovie(c.Context(), id, movie, req.GenreIDs)
@@ -248,6 +278,11 @@ func (h *MovieHandler) AddMagnet(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
+	req.ContentType = "movie"
+	req.ContentID = id
+	if err := h.validate.Struct(req); err != nil {
+		return response.BadRequest(c, "Invalid magnet data")
+	}
 
 	ml := model.MagnetLink{
 		ContentType:   "movie",
@@ -267,4 +302,15 @@ func (h *MovieHandler) AddMagnet(c *fiber.Ctx) error {
 	}
 
 	return response.Created(c, dto.ToMagnetLinkResponse(magnet))
+}
+
+func parseOptionalDate(value *string) (*time.Time, error) {
+	if value == nil || *value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse("2006-01-02", *value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }

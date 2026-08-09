@@ -67,8 +67,34 @@ export function isValidMagnet(uri: string): boolean {
  * Magnet URIs have the form: magnet:?xt=urn:btih:<infoHash>&...
  */
 export function extractInfoHash(magnetURI: string): string | null {
-  const match = magnetURI.match(/btih:([a-fA-F0-9]{40})/i)
-  return match ? match[1].toLowerCase() : null
+  const match = magnetURI.match(/btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i)
+  if (!match) return null
+
+  const hash = match[1]
+  if (hash.length === 40) return hash.toLowerCase()
+  return base32ToHex(hash)
+}
+
+function base32ToHex(value: string): string | null {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let buffer = 0
+  let bits = 0
+  let hex = ''
+
+  for (const character of value.toUpperCase()) {
+    const digit = alphabet.indexOf(character)
+    if (digit < 0) return null
+
+    buffer = (buffer << 5) | digit
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      hex += ((buffer >> bits) & 0xff).toString(16).padStart(2, '0')
+      buffer &= bits === 0 ? 0 : (1 << bits) - 1
+    }
+  }
+
+  return hex.length === 40 ? hex : null
 }
 
 /**

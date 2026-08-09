@@ -1,5 +1,3 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
-
 export type TorrentMode = 'stream' | 'download'
 
 export interface TorrentFile {
@@ -19,6 +17,38 @@ export interface TorrentInfo {
   mode: TorrentMode
 }
 
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+
+export interface TorrentSearchResult {
+  id: string
+  name: string
+  magnetURI: string
+  seeders: number
+  leechers: number
+  size: string
+  sizeBytes: number
+  category: string
+  added: string
+  provider: TorrentProviderName
+  qualityScore?: number
+}
+
+export interface TorrentProviderStatus {
+  name: TorrentProviderName
+  status: 'ok' | 'error' | 'cooldown'
+  count: number
+  error?: string
+  latencyMs?: number
+  consecutiveFailures?: number
+  retryAt?: number
+  fromCache?: boolean
+}
+
+export interface TorrentSearchResponse {
+  results: TorrentSearchResult[]
+  providers: TorrentProviderStatus[]
+  cache?: 'miss' | 'fresh' | 'stale'
+}
 export interface TorrentProgress {
   infoHash: string
   progress: number
@@ -32,6 +62,48 @@ export interface TorrentProgress {
   ratio: number
   bufferProgress: number
   mode: TorrentMode
+  peerConnections: PeerConnectionDiagnostics
+}
+
+export interface PeerConnectionDiagnostics {
+  discovered: number
+  pending: number
+  connected: number
+  fastTcpFallbacksArmed: number
+  bySource: Record<'tracker' | 'dht' | 'lsd' | 'pex' | 'manual' | 'unknown', number>
+  byTransport: Record<'tcp' | 'utp' | 'webrtc' | 'webseed' | 'unknown', number>
+}
+
+export interface MediaAudioTrack {
+  index: number
+  codec: string
+  language: string
+  title: string | null
+  channels: number
+  channelLayout: string | null
+  isDefault: boolean
+}
+
+export interface MediaSubtitleTrack {
+  index: number
+  codec: string
+  language: string
+  title: string | null
+  isDefault: boolean
+  textBased: boolean
+}
+
+export interface MediaInfo {
+  videoCodec: string | null
+  audioCodec: string | null
+  audioTracks: MediaAudioTrack[]
+  subtitleTracks: MediaSubtitleTrack[]
+  duration: number
+  width: number
+  height: number
+  needsVideoTranscode: boolean
+  needsAudioTranscode: boolean
+  needsTranscode: boolean
 }
 
 export interface TorrentAPI {
@@ -49,8 +121,10 @@ export interface TorrentAPI {
   removeTorrent: (infoHash: string) => Promise<void>
   getTorrents: () => Promise<TorrentInfo[]>
   getStreamURL: (infoHash: string) => Promise<string>
+  getMediaInfo: (infoHash: string) => Promise<MediaInfo | null>
   selectFile: (infoHash: string, fileIndex: number) => Promise<string>
   notifySeek: (infoHash: string, position: number) => Promise<void>
+  updatePlaybackPosition: (infoHash: string, currentTime: number, duration: number) => Promise<void>
 
   // Events
   onTorrentProgress: (callback: (data: TorrentProgress) => void) => () => void
@@ -58,7 +132,7 @@ export interface TorrentAPI {
   onTorrentError: (callback: (data: { infoHash: string; error: string }) => void) => () => void
 
   // Search
-  searchNyaa: (query: string) => Promise<any[]>
+  searchTorrents: (query: string) => Promise<TorrentSearchResponse>
 
   // Cache
   getCacheSize: () => Promise<number>
@@ -74,7 +148,6 @@ export interface TorrentAPI {
 
 declare global {
   interface Window {
-    electron: ElectronAPI
     torrentAPI: TorrentAPI
   }
 }

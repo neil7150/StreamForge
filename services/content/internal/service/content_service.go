@@ -25,6 +25,7 @@ const (
 	cacheTTLRecent   = 15 * time.Minute
 	cacheTTLMovie    = 1 * time.Hour
 	cacheTTLFeatured = 30 * time.Minute
+	maxCachedMovies  = 50
 )
 
 // Cache key prefixes.
@@ -89,6 +90,7 @@ func (s *ContentService) GetMovie(ctx context.Context, slug string) (model.Movie
 	cacheKey := cacheKeyMovieBySlug + slug
 	if cached, err := s.getMovieFromCache(ctx, cacheKey); err == nil {
 		s.log.Debug().Str("slug", slug).Msg("movie cache hit")
+		s.incrementViewCountAsync(cached.ID)
 		return cached, nil
 	}
 
@@ -107,13 +109,7 @@ func (s *ContentService) GetMovie(ctx context.Context, slug string) (model.Movie
 	}
 
 	// Increment view count asynchronously
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.movieRepo.IncrementViewCount(bgCtx, movie.ID); err != nil {
-			s.log.Warn().Err(err).Msg("failed to increment view count")
-		}
-	}()
+	s.incrementViewCountAsync(movie.ID)
 
 	// Cache the enriched movie
 	s.cacheMovie(ctx, cacheKey, movie, cacheTTLMovie)
@@ -171,6 +167,8 @@ func (s *ContentService) CreateMovie(ctx context.Context, movie model.Movie, gen
 
 // UpdateMovie updates an existing movie.
 func (s *ContentService) UpdateMovie(ctx context.Context, id uuid.UUID, movie model.Movie, genreIDs []uuid.UUID) (model.Movie, error) {
+	previous, _ := s.movieRepo.GetByID(ctx, id)
+
 	// Generate slug if title is being updated
 	if movie.Title != "" {
 		movie.Slug = generateSlug(movie.Title)
@@ -201,6 +199,9 @@ func (s *ContentService) UpdateMovie(ctx context.Context, id uuid.UUID, movie mo
 	s.invalidateMovieCaches(ctx)
 	s.rdb.Del(ctx, cacheKeyMovieByID+id.String())
 	s.rdb.Del(ctx, cacheKeyMovieBySlug+updated.Slug)
+	if previous.Slug != "" && previous.Slug != updated.Slug {
+		s.rdb.Del(ctx, cacheKeyMovieBySlug+previous.Slug)
+	}
 
 	s.log.Info().Str("id", id.String()).Msg("movie updated")
 	return updated, nil
@@ -251,8 +252,12 @@ func (s *ContentService) AddMagnetLink(ctx context.Context, ml model.MagnetLink)
 		return created, err
 	}
 
-	// Invalidate movie cache
+	// Invalidate detail and list caches so magnet counts update immediately.
+	s.invalidateMovieCaches(ctx)
 	s.rdb.Del(ctx, cacheKeyMovieByID+ml.ContentID.String())
+	if movie, err := s.movieRepo.GetByID(ctx, ml.ContentID); err == nil && movie.Slug != "" {
+		s.rdb.Del(ctx, cacheKeyMovieBySlug+movie.Slug)
+	}
 
 	s.log.Info().Str("id", created.ID.String()).Str("content_id", ml.ContentID.String()).Msg("magnet link added")
 	return created, nil
@@ -276,10 +281,10 @@ func (s *ContentService) GetTrending(ctx context.Context, limit int) ([]model.Mo
 	// Check cache
 	if cached, err := s.getMoviesFromCache(ctx, cacheKeyTrending); err == nil {
 		s.log.Debug().Msg("trending movies cache hit")
-		return cached, nil
+		return limitMovies(cached, limit), nil
 	}
 
-	movies, err := s.movieRepo.GetTrending(ctx, limit)
+	movies, err := s.movieRepo.GetTrending(ctx, maxCachedMovies)
 	if err != nil {
 		s.log.Error().Err(err).Msg("failed to get trending movies")
 		return nil, err
@@ -292,17 +297,17 @@ func (s *ContentService) GetTrending(ctx context.Context, limit int) ([]model.Mo
 	}
 
 	s.cacheMovies(ctx, cacheKeyTrending, movies, cacheTTLTrending)
-	return movies, nil
+	return limitMovies(movies, limit), nil
 }
 
 // GetRecent returns recently added movies (cached).
 func (s *ContentService) GetRecent(ctx context.Context, limit int) ([]model.Movie, error) {
 	if cached, err := s.getMoviesFromCache(ctx, cacheKeyRecent); err == nil {
 		s.log.Debug().Msg("recent movies cache hit")
-		return cached, nil
+		return limitMovies(cached, limit), nil
 	}
 
-	movies, err := s.movieRepo.GetRecent(ctx, limit)
+	movies, err := s.movieRepo.GetRecent(ctx, maxCachedMovies)
 	if err != nil {
 		s.log.Error().Err(err).Msg("failed to get recent movies")
 		return nil, err
@@ -314,18 +319,18 @@ func (s *ContentService) GetRecent(ctx context.Context, limit int) ([]model.Movi
 	}
 
 	s.cacheMovies(ctx, cacheKeyRecent, movies, cacheTTLRecent)
-	return movies, nil
+	return limitMovies(movies, limit), nil
 }
 
 // GetFeatured returns featured movies (mix of high-rated and trending, cached).
 func (s *ContentService) GetFeatured(ctx context.Context, limit int) ([]model.Movie, error) {
 	if cached, err := s.getMoviesFromCache(ctx, cacheKeyFeatured); err == nil {
 		s.log.Debug().Msg("featured movies cache hit")
-		return cached, nil
+		return limitMovies(cached, limit), nil
 	}
 
 	// Featured = highest rated active movies
-	movies, _, err := s.movieRepo.List(ctx, 1, limit, "", "avg_rating", "desc")
+	movies, _, err := s.movieRepo.List(ctx, 1, maxCachedMovies, "", "avg_rating", "desc")
 	if err != nil {
 		s.log.Error().Err(err).Msg("failed to get featured movies")
 		return nil, err
@@ -337,7 +342,7 @@ func (s *ContentService) GetFeatured(ctx context.Context, limit int) ([]model.Mo
 	}
 
 	s.cacheMovies(ctx, cacheKeyFeatured, movies, cacheTTLFeatured)
-	return movies, nil
+	return limitMovies(movies, limit), nil
 }
 
 // GetMagnetCount returns the number of magnet links for a movie.
@@ -350,6 +355,26 @@ func (s *ContentService) GetMagnetCount(ctx context.Context, movieID uuid.UUID) 
 }
 
 // --- Cache helpers ---
+
+func limitMovies(movies []model.Movie, limit int) []model.Movie {
+	if limit < 0 {
+		limit = 0
+	}
+	if limit >= len(movies) {
+		return movies
+	}
+	return movies[:limit]
+}
+
+func (s *ContentService) incrementViewCountAsync(movieID uuid.UUID) {
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.movieRepo.IncrementViewCount(bgCtx, movieID); err != nil {
+			s.log.Warn().Err(err).Str("movie_id", movieID.String()).Msg("failed to increment view count")
+		}
+	}()
+}
 
 func (s *ContentService) enrichMovie(ctx context.Context, movie *model.Movie) error {
 	genres, err := s.movieRepo.GetGenres(ctx, movie.ID)

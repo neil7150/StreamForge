@@ -4,7 +4,8 @@
  * Falls back to mock data when the backend is unreachable.
  */
 
-const API_BASE = 'http://localhost:8080' // Nginx gateway
+const configuredAPIBase = import.meta.env.VITE_API_BASE_URL?.trim()
+const API_BASE = configuredAPIBase || (import.meta.env.DEV ? 'http://localhost:8080' : '')
 
 interface RequestOptions {
   method?: string
@@ -25,6 +26,9 @@ class APIClient {
   }
 
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+    if (!this.baseURL) {
+      throw new Error('The StreamForge backend endpoint is not configured for this build.')
+    }
     const { method = 'GET', body, token } = options
     const authToken = token || this.token
 

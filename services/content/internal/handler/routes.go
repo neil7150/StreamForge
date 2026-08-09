@@ -3,11 +3,11 @@ package handler
 import (
 	"github.com/gofiber/fiber/v2"
 
-	"streamforge/pkg/auth"
+	"streamforge.local/pkg/auth"
 )
 
 // SetupRoutes registers all content service routes.
-func SetupRoutes(app *fiber.App, movieH *MovieHandler, genreH *GenreHandler, jwtSecret string) {
+func SetupRoutes(app *fiber.App, movieH *MovieHandler, genreH *GenreHandler, jwtSecret string, blacklist auth.TokenBlacklist) {
 	api := app.Group("/api/v1")
 
 	// ── Public routes (no auth required) ─────────────────
@@ -24,7 +24,7 @@ func SetupRoutes(app *fiber.App, movieH *MovieHandler, genreH *GenreHandler, jwt
 	genres.Get("/:slug/content", genreH.GetGenreContent)
 
 	// ── Admin routes (require auth + admin role) ─────────
-	admin := api.Group("/admin", auth.AuthMiddleware(jwtSecret), auth.AdminMiddleware())
+	admin := api.Group("/admin", auth.AuthMiddleware(jwtSecret, blacklist), auth.AdminMiddleware())
 
 	adminMovies := admin.Group("/movies")
 	adminMovies.Post("/", movieH.CreateMovie)

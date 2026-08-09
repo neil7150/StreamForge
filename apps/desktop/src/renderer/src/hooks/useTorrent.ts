@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+﻿import { useEffect } from 'react'
 import { useTorrentStore } from '../stores/torrentStore'
 
 /**
@@ -10,26 +10,27 @@ import { useTorrentStore } from '../stores/torrentStore'
 export function useTorrentEvents(): void {
   const updateProgress = useTorrentStore((s) => s.updateProgress)
   const setTorrentReady = useTorrentStore((s) => s.setTorrentReady)
-  const setError = useTorrentStore((s) => s.setError)
+  const setTorrentError = useTorrentStore((s) => s.setTorrentError)
   const loadStreams = useTorrentStore((s) => s.loadStreams)
   const loadDownloads = useTorrentStore((s) => s.loadDownloads)
 
   useEffect(() => {
-    // Load existing torrents on mount (both modes)
+    const api = window.torrentAPI
+    if (!api) return
+
     loadStreams()
     loadDownloads()
 
-    // Subscribe to events
-    const cleanupProgress = window.torrentAPI.onTorrentProgress((data) => {
+    const cleanupProgress = api.onTorrentProgress((data) => {
       updateProgress(data)
     })
 
-    const cleanupReady = window.torrentAPI.onTorrentReady((data) => {
+    const cleanupReady = api.onTorrentReady((data) => {
       setTorrentReady(data)
     })
 
-    const cleanupError = window.torrentAPI.onTorrentError((data) => {
-      setError(`[${data.infoHash.slice(0, 8)}…] ${data.error}`)
+    const cleanupError = api.onTorrentError((data) => {
+      setTorrentError(data.infoHash, data.error)
     })
 
     return () => {
@@ -37,5 +38,5 @@ export function useTorrentEvents(): void {
       cleanupReady()
       cleanupError()
     }
-  }, [updateProgress, setTorrentReady, setError, loadStreams, loadDownloads])
+  }, [updateProgress, setTorrentReady, setTorrentError, loadStreams, loadDownloads])
 }

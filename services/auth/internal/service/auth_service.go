@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/argon2"
 
-	"streamforge/pkg/auth"
+	"streamforge.local/pkg/auth"
 	"streamforge/services/auth/internal/dto"
 	"streamforge/services/auth/internal/model"
 	"streamforge/services/auth/internal/repository"

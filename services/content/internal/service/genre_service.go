@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
@@ -97,4 +98,14 @@ func (s *GenreService) GetGenreContent(ctx context.Context, genreSlug string, pa
 	}
 
 	return movies, total, nil
+}
+
+// GetMagnetCount returns the number of magnet links for a movie.
+func (s *GenreService) GetMagnetCount(ctx context.Context, movieID uuid.UUID) int {
+	count, err := s.movieRepo.GetMagnetCount(ctx, movieID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("movie_id", movieID.String()).Msg("failed to count movie magnets")
+		return 0
+	}
+	return count
 }

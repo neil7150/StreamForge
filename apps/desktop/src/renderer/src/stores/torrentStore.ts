@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { TorrentInfo, TorrentProgress } from '../../../preload/index.d'
+import { extractInfoHash } from '../lib/utils'
 
 interface TorrentState {
   /** Stream-mode torrents (ephemeral) */
@@ -8,14 +9,19 @@ interface TorrentState {
   downloads: Map<string, TorrentInfo>
   /** Progress data for all torrents */
   progress: Map<string, TorrentProgress>
+  /** Asynchronous torrent errors keyed by info hash. */
+  torrentErrors: Map<string, string>
 
   isLoading: boolean
   error: string | null
+  streamMagnets: Map<string, string>
 
   // Streaming (ephemeral)
   addTorrent: (magnetURI: string) => Promise<TorrentInfo>
   cleanupStream: (infoHash: string) => Promise<void>
   loadStreams: () => Promise<void>
+  retryStream: (infoHash: string) => Promise<TorrentInfo>
+
 
   // Downloads (persistent)
   addDownload: (magnetURI: string) => Promise<TorrentInfo>
@@ -25,6 +31,7 @@ interface TorrentState {
   removeTorrent: (infoHash: string) => Promise<void>
   updateProgress: (data: TorrentProgress) => void
   setTorrentReady: (data: TorrentInfo) => void
+  setTorrentError: (infoHash: string, error: string) => void
   setError: (error: string | null) => void
   clearError: () => void
 }
@@ -33,24 +40,53 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   streams: new Map(),
   downloads: new Map(),
   progress: new Map(),
+  torrentErrors: new Map(),
   isLoading: false,
   error: null,
+  streamMagnets: new Map(),
 
   // ─── Streaming (ephemeral) ───────────────────────────────────────
 
   addTorrent: async (magnetURI: string) => {
-    set({ isLoading: true, error: null })
+    const incomingHash = extractInfoHash(magnetURI)
+    set((state) => {
+      const streamMagnets = new Map(state.streamMagnets)
+      const torrentErrors = new Map(state.torrentErrors)
+      if (incomingHash) {
+        streamMagnets.set(incomingHash, magnetURI)
+        torrentErrors.delete(incomingHash)
+      }
+      return { isLoading: true, error: null, streamMagnets, torrentErrors }
+    })
     try {
       const info = await window.torrentAPI.addTorrent(magnetURI)
       set((state) => {
         const streams = new Map(state.streams)
+        const streamMagnets = new Map(state.streamMagnets)
+        const torrentErrors = new Map(state.torrentErrors)
         streams.set(info.infoHash, info)
-        return { streams, isLoading: false }
+        streamMagnets.set(info.infoHash.toLowerCase(), magnetURI)
+        torrentErrors.delete(info.infoHash.toLowerCase())
+        return { streams, streamMagnets, torrentErrors, isLoading: false }
       })
       return info
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to add torrent'
-      set({ isLoading: false, error: message })
+      set((state) => {
+        const torrentErrors = new Map(state.torrentErrors)
+        if (incomingHash) {
+          if (message.includes('STREAM_CANCELLED')) {
+            torrentErrors.delete(incomingHash)
+          } else {
+            torrentErrors.set(incomingHash, message)
+          }
+        }
+        return {
+          isLoading: false,
+          error: message.includes('STREAM_CANCELLED') ? null : message,
+          torrentErrors
+        }
+      })
       throw err
     }
   },
@@ -61,9 +97,13 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       set((state) => {
         const streams = new Map(state.streams)
         const progress = new Map(state.progress)
+        const streamMagnets = new Map(state.streamMagnets)
+        const torrentErrors = new Map(state.torrentErrors)
         streams.delete(infoHash)
         progress.delete(infoHash)
-        return { streams, progress }
+        streamMagnets.delete(infoHash.toLowerCase())
+        torrentErrors.delete(infoHash.toLowerCase())
+        return { streams, progress, streamMagnets, torrentErrors, error: null }
       })
     } catch (err) {
       console.warn('[TorrentStore] Failed to cleanup stream:', err)
@@ -83,6 +123,12 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
   },
 
+  retryStream: async (infoHash: string) => {
+    const magnetURI = get().streamMagnets.get(infoHash.toLowerCase())
+    if (!magnetURI) throw new Error('The original magnet link is no longer available. Choose the source again.')
+    await get().cleanupStream(infoHash)
+    return get().addTorrent(magnetURI)
+  },
   // ─── Downloads (persistent) ──────────────────────────────────────
 
   addDownload: async (magnetURI: string) => {
@@ -124,10 +170,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         const streams = new Map(state.streams)
         const downloads = new Map(state.downloads)
         const progress = new Map(state.progress)
+        const streamMagnets = new Map(state.streamMagnets)
+        const torrentErrors = new Map(state.torrentErrors)
         streams.delete(infoHash)
         downloads.delete(infoHash)
         progress.delete(infoHash)
-        return { streams, downloads, progress }
+        streamMagnets.delete(infoHash.toLowerCase())
+        torrentErrors.delete(infoHash.toLowerCase())
+        return { streams, downloads, progress, streamMagnets, torrentErrors, error: null }
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to remove torrent'
@@ -145,18 +195,27 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   setTorrentReady: (data: TorrentInfo) => {
     set((state) => {
+      const torrentErrors = new Map(state.torrentErrors)
+      torrentErrors.delete(data.infoHash.toLowerCase())
       if (data.mode === 'download') {
         const downloads = new Map(state.downloads)
         downloads.set(data.infoHash, data)
-        return { downloads }
+        return { downloads, torrentErrors }
       } else {
         const streams = new Map(state.streams)
         streams.set(data.infoHash, data)
-        return { streams }
+        return { streams, torrentErrors }
       }
     })
   },
 
+  setTorrentError: (infoHash, error) => {
+    set((state) => {
+      const torrentErrors = new Map(state.torrentErrors)
+      torrentErrors.set(infoHash.toLowerCase(), error)
+      return { torrentErrors }
+    })
+  },
   setError: (error) => set({ error }),
   clearError: () => set({ error: null })
 }))

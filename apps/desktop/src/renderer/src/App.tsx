@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Routes, Route } from 'react-router-dom'
+﻿import { useEffect } from 'react'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import TitleBar from './components/ui/TitleBar'
 import Sidebar from './components/ui/Sidebar'
 import Home from './pages/Home'
@@ -15,12 +15,12 @@ import { useTorrentEvents } from './hooks/useTorrent'
 import { useAppStore } from './stores/appStore'
 
 export default function App() {
-  // Subscribe to torrent events globally
   useTorrentEvents()
 
-  const refreshCacheSize = useAppStore((s) => s.refreshCacheSize)
+  const refreshCacheSize = useAppStore((state) => state.refreshCacheSize)
+  const location = useLocation()
+  const isPlayer = location.pathname.startsWith('/player/')
 
-  // Periodically refresh cache size
   useEffect(() => {
     refreshCacheSize()
     const interval = setInterval(refreshCacheSize, 30_000)
@@ -28,18 +28,12 @@ export default function App() {
   }, [refreshCacheSize])
 
   return (
-    <div className="flex h-screen flex-col bg-[var(--color-bg-primary)]">
-      {/* Title Bar */}
+    <div className="flex h-screen flex-col overflow-hidden bg-[var(--color-bg-primary)]">
       <TitleBar />
-
-      {/* Main Layout */}
       <div className="flex min-h-0 flex-1">
-        {/* Sidebar */}
-        <Sidebar />
-
-        {/* Content */}
-        <main className="flex-1 min-w-0 overflow-hidden">
-          <div className="h-full animate-[fade-in_0.3s_ease-out]">
+        {!isPlayer && <Sidebar />}
+        <main className="min-w-0 flex-1 overflow-hidden">
+          <div key={location.pathname} className="h-full animate-[fade-in_0.16s_ease-out]">
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/browse" element={<Browse />} />

@@ -14,11 +14,11 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"streamforge/pkg/auth"
-	"streamforge/pkg/cache"
-	"streamforge/pkg/database"
-	"streamforge/pkg/logger"
-	"streamforge/pkg/middleware"
+	"streamforge.local/pkg/auth"
+	"streamforge.local/pkg/cache"
+	"streamforge.local/pkg/database"
+	"streamforge.local/pkg/logger"
+	"streamforge.local/pkg/middleware"
 	"streamforge/services/auth/internal/config"
 	"streamforge/services/auth/internal/handler"
 	"streamforge/services/auth/internal/repository"
@@ -95,9 +95,13 @@ func main() {
 			"time":    time.Now().UTC(),
 		})
 	})
+	app.Get("/metrics", func(c *fiber.Ctx) error {
+		c.Type("txt")
+		return c.SendString("# HELP streamforge_up Whether the service is running.\n# TYPE streamforge_up gauge\nstreamforge_up{service=\"auth\"} 1\n")
+	})
 
 	// Register auth routes
-	handler.SetupRoutes(app, authHandler, cfg.JWTSecret)
+	handler.SetupRoutes(app, authHandler, cfg.JWTSecret, tokenRepo)
 
 	// ── Graceful shutdown ───────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)

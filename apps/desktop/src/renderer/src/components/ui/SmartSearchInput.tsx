@@ -1,33 +1,15 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import {
-  Search,
-  Play,
-  Link2,
-  Clipboard,
-  Loader2,
-  AlertCircle,
-  ArrowRight,
-  X
-} from 'lucide-react'
+﻿import { useState, useCallback, useRef, useEffect } from 'react'
+import { Search, Play, Link2, Clipboard, Loader2, AlertCircle, ArrowRight, X } from 'lucide-react'
 import clsx from 'clsx'
 import { isValidMagnet } from '../../lib/utils'
 
-type InputMode = 'search' | 'magnet'
-
 interface SmartSearchInputProps {
-  /** Called when the user wants to stream a magnet link */
   onMagnet: (magnetURI: string) => void
-  /** Called when the user wants to search with text */
   onSearch: (query: string) => void
-  /** Optional initial value (e.g. when re-opening search page) */
   initialValue?: string
-  /** Loading state from the parent */
   isLoading?: boolean
-  /** External error (e.g. from torrent add failure) */
   error?: string | null
-  /** Placeholder shown in search mode */
   searchPlaceholder?: string
-  /** Auto-focus on mount */
   autoFocus?: boolean
 }
 
@@ -37,213 +19,87 @@ export default function SmartSearchInput({
   initialValue = '',
   isLoading = false,
   error = null,
-  searchPlaceholder = 'Search movies, shows, or paste a magnet link...',
+  searchPlaceholder = 'Search movies, shows, or paste a magnet link',
   autoFocus = false
 }: SmartSearchInputProps) {
   const [value, setValue] = useState(initialValue)
   const [focused, setFocused] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-
-  // Detect mode based on current input value
-  const mode: InputMode = isValidMagnet(value.trim()) ? 'magnet' : 'search'
-
+  const isMagnet = isValidMagnet(value.trim())
   const displayError = error ?? localError
 
-  // Update when initialValue changes from parent
-  useEffect(() => {
-    setValue(initialValue)
-  }, [initialValue])
+  useEffect(() => setValue(initialValue), [initialValue])
 
-  const handleSubmit = useCallback(() => {
+  const submit = useCallback(() => {
     setLocalError(null)
-    const trimmed = value.trim()
-    if (!trimmed) return
+    const next = value.trim()
+    if (!next) return
+    if (isValidMagnet(next)) onMagnet(next)
+    else onSearch(next)
+  }, [onMagnet, onSearch, value])
 
-    if (isValidMagnet(trimmed)) {
-      onMagnet(trimmed)
-    } else {
-      onSearch(trimmed)
-    }
-  }, [value, onMagnet, onSearch])
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !isLoading) {
-        handleSubmit()
-      }
-      if (e.key === 'Escape') {
-        setValue('')
-        setLocalError(null)
-        inputRef.current?.blur()
-      }
-    },
-    [handleSubmit, isLoading]
-  )
-
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setValue(e.target.value)
-    setLocalError(null)
-  }, [])
-
-  const handleClear = useCallback(() => {
-    setValue('')
-    setLocalError(null)
-    inputRef.current?.focus()
-  }, [])
-
-  const handlePaste = useCallback(async () => {
+  const paste = useCallback(async () => {
     try {
       const text = await navigator.clipboard.readText()
       setValue(text)
       setLocalError(null)
-      // Auto-submit if it's a magnet link
-      if (text.trim() && isValidMagnet(text.trim())) {
-        onMagnet(text.trim())
-      }
+      if (isValidMagnet(text.trim())) onMagnet(text.trim())
     } catch {
       setLocalError('Unable to read clipboard')
     }
   }, [onMagnet])
 
-  const isMagnet = mode === 'magnet'
-
   return (
     <div className="w-full">
-      {/* Main input container */}
-      <div
-        className={clsx(
-          'relative flex items-center rounded-2xl transition-all duration-300',
-          // Background & border
-          'bg-white/[0.04] border',
-          focused
-            ? isMagnet
-              ? 'border-violet-500/60 shadow-[0_0_0_3px_rgba(139,92,246,0.12),0_8px_32px_rgba(0,0,0,0.4)]'
-              : 'border-[var(--color-accent)]/50 shadow-[0_0_0_3px_var(--color-accent-glow),0_8px_32px_rgba(0,0,0,0.4)]'
-            : displayError
-              ? 'border-red-500/40 shadow-[0_0_0_2px_rgba(239,68,68,0.08)]'
-              : 'border-white/10 shadow-[0_4px_24px_rgba(0,0,0,0.35)] hover:border-white/20 hover:shadow-[0_8px_32px_rgba(0,0,0,0.45)]'
-        )}
-      >
-        {/* Left icon — morphs based on mode */}
-        <div
-          className={clsx(
-            'ml-4 mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-all duration-300',
-            isMagnet
-              ? 'bg-violet-500/15 text-violet-400'
-              : 'text-[var(--color-text-muted)]'
-          )}
-        >
-          {isLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-[var(--color-accent)]" />
-          ) : isMagnet ? (
-            <Link2 className="h-4 w-4" />
-          ) : (
-            <Search className="h-4 w-4" />
-          )}
-        </div>
-
-        {/* Input */}
+      <div className={clsx(
+        'flex h-12 items-center rounded-xl border bg-[#181a1d] transition-colors',
+        focused ? 'border-teal-300/55' : displayError ? 'border-red-400/45' : 'border-white/[0.09] hover:border-white/[0.15]'
+      )}>
+        <span className="ml-4 text-white/32">
+          {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-teal-300" /> : isMagnet ? <Link2 className="h-4 w-4 text-teal-300" /> : <Search className="h-4 w-4" />}
+        </span>
         <input
           ref={inputRef}
-          type="text"
           value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
+          onChange={(event) => { setValue(event.target.value); setLocalError(null) }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !isLoading) submit()
+            if (event.key === 'Escape') { setValue(''); setLocalError(null); inputRef.current?.blur() }
+          }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           placeholder={searchPlaceholder}
           autoFocus={autoFocus}
           disabled={isLoading}
           spellCheck={false}
-          className={clsx(
-            'min-w-0 flex-1 bg-transparent px-3 py-4 text-sm outline-none transition-colors disabled:opacity-50',
-            isMagnet
-              ? 'font-mono text-violet-300 placeholder-violet-400/40'
-              : 'text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]'
-          )}
+          className={clsx('min-w-0 flex-1 bg-transparent px-3 text-[13px] text-white/85 outline-none placeholder:text-white/27 disabled:opacity-50', isMagnet && 'font-mono text-teal-200')}
         />
-
-        {/* Right actions */}
-        <div className="mr-3 flex items-center gap-1.5 shrink-0">
-          {/* Clear button */}
-          {value && !isLoading && (
-            <button
-              onClick={handleClear}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-all hover:bg-white/10 hover:text-[var(--color-text-secondary)]"
-              title="Clear"
-            >
+        <div className="mr-2 flex shrink-0 items-center gap-1">
+          {value ? (
+            <button onClick={() => { setValue(''); setLocalError(null); inputRef.current?.focus() }} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.06] hover:text-white/65" title="Clear">
               <X className="h-3.5 w-3.5" />
             </button>
-          )}
-
-          {/* Paste button — always visible */}
-          {!value && (
-            <button
-              onClick={handlePaste}
-              disabled={isLoading}
-              className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--color-text-muted)] transition-all hover:bg-white/10 hover:text-[var(--color-text-secondary)] disabled:opacity-40"
-              title="Paste from clipboard"
-            >
-              <Clipboard className="h-3.5 w-3.5" />
-              <span>Paste</span>
+          ) : (
+            <button onClick={() => void paste()} disabled={isLoading} className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-medium text-white/35 hover:bg-white/[0.05] hover:text-white/65">
+              <Clipboard className="h-3.5 w-3.5" /> Paste
             </button>
           )}
-
-          {/* Submit button */}
           <button
-            onClick={handleSubmit}
+            onClick={submit}
             disabled={isLoading || !value.trim()}
-            className={clsx(
-              'flex h-9 items-center gap-2 rounded-xl px-4 text-xs font-semibold transition-all duration-200',
-              'disabled:opacity-30 disabled:cursor-not-allowed',
-              value.trim() && !isLoading
-                ? isMagnet
-                  ? 'bg-violet-500 text-white shadow-[0_0_16px_rgba(139,92,246,0.35)] hover:bg-violet-400 hover:shadow-[0_0_20px_rgba(139,92,246,0.5)] active:scale-95'
-                  : 'bg-[var(--color-accent)] text-white shadow-[var(--shadow-glow)] hover:bg-[var(--color-accent-hover)] active:scale-95'
-                : 'bg-white/8 text-[var(--color-text-muted)]'
-            )}
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-white px-3 text-[10px] font-semibold text-[#17191b] hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/[0.07] disabled:text-white/25"
           >
-            {isMagnet ? (
-              <>
-                <Play className="h-3.5 w-3.5 fill-current" />
-                <span>Stream</span>
-              </>
-            ) : (
-              <>
-                <span>Search</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </>
-            )}
+            {isMagnet ? <><Play className="h-3 w-3 fill-current" /> Stream</> : <>Search <ArrowRight className="h-3 w-3" /></>}
           </button>
         </div>
       </div>
-
-      {/* Mode indicator pill */}
-      <div className="mt-2 flex items-center gap-2 px-1">
-        {isMagnet ? (
-          <span className="flex items-center gap-1.5 rounded-full bg-violet-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-violet-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />
-            Magnet link detected — press Enter to stream
-          </span>
-        ) : value.trim() ? (
-          <span className="text-[10px] text-[var(--color-text-muted)]/70">
-            Press <kbd className="rounded bg-white/10 px-1 py-0.5 font-mono text-[10px]">Enter</kbd> to search · or paste a magnet link to stream instantly
-          </span>
-        ) : (
-          <span className="text-[10px] text-[var(--color-text-muted)]/50">
-            Search worldwide torrents · or paste a magnet link to stream instantly
-          </span>
-        )}
-
-        {/* Error */}
-        {displayError && (
-          <span className="ml-auto flex items-center gap-1 text-[10px] text-red-400">
-            <AlertCircle className="h-3 w-3" />
-            {displayError}
-          </span>
-        )}
-      </div>
+      {(isMagnet || displayError) && (
+        <div className="mt-2 flex min-h-4 items-center text-[10px]">
+          {isMagnet && <span className="text-teal-300/70">Magnet link detected</span>}
+          {displayError && <span className="ml-auto flex items-center gap-1 text-red-300/80"><AlertCircle className="h-3 w-3" />{displayError}</span>}
+        </div>
+      )}
     </div>
   )
 }

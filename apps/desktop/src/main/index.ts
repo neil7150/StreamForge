@@ -33,20 +33,62 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
-      stream: true,
-      bypassCSP: true
+      stream: true
     }
   }
 ])
-
-// ─── Disable CORS restrictions for local streaming ─────────────────
-app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors')
 
 // ─── Core service instances ────────────────────────────────────────
 let torrentManager: TorrentManager
 let streamServer: StreamServer
 let cacheManager: CacheManager
 let mainWindow: BrowserWindow | null = null
+let shutdownStarted = false
+
+function isBenignWebRTCCloseError(error: unknown): boolean {
+  const value = error as { name?: string; message?: string; stack?: string }
+  return value?.name === 'OperationError'
+    && value?.message === 'User-Initiated Abort, reason=Close called'
+    && (value?.stack?.includes('webrtc-polyfill') ?? false)
+}
+
+process.on('uncaughtException', (error) => {
+  if (isBenignWebRTCCloseError(error)) {
+    console.warn('[Main] Ignored expected WebRTC peer-close race')
+    return
+  }
+  console.error('[Main] Uncaught exception:', error)
+  app.exit(1)
+})
+
+function openSafeExternalURL(rawURL: string): void {
+  try {
+    const url = new URL(rawURL)
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      void shell.openExternal(url.toString())
+    }
+  } catch {
+    console.warn('[Main] Blocked invalid external URL:', rawURL)
+  }
+}
+
+function isTrustedNavigation(target: string, current: string): boolean {
+  try {
+    const targetURL = new URL(target)
+    const currentURL = new URL(current)
+
+    if (targetURL.protocol === 'file:' && currentURL.protocol === 'file:') {
+      return targetURL.pathname === currentURL.pathname
+    }
+
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      return targetURL.origin === new URL(process.env['ELECTRON_RENDERER_URL']).origin
+    }
+  } catch {
+    return false
+  }
+  return false
+}
 
 /**
  * Creates the main application window with a frameless, dark-themed design.
@@ -63,22 +105,31 @@ function createWindow(): BrowserWindow {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false
+      webSecurity: true
     }
   })
 
   // Show window once content is ready to avoid visual flash
   mainWindow.on('ready-to-show', () => {
-    mainWindow!.show()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show()
+    }
   })
 
-  // Open external links in the default browser instead of a new Electron window
+  // Keep untrusted pages out of the privileged renderer and only open safe web links externally.
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openSafeExternalURL(details.url)
     return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, targetURL) => {
+    const currentURL = mainWindow?.webContents.getURL() ?? ''
+    if (!isTrustedNavigation(targetURL, currentURL)) {
+      event.preventDefault()
+      openSafeExternalURL(targetURL)
+    }
   })
 
   // Load the renderer — dev server in development, built file in production
@@ -126,19 +177,25 @@ app.whenReady().then(async () => {
 
   // Register protocol interceptor: redirect media:// to the HTTP stream server
   protocol.handle('media', async (request) => {
-    const urlPath = request.url.replace('media://', '')
-    const targetURL = `${baseURL}/${urlPath}`
-    console.log(`[Protocol] media://${urlPath} → ${targetURL}`)
-    console.log(`[Protocol] Range: ${request.headers.get('Range') || 'none'}`)
-
+    let targetURL = ''
     try {
-      const fetchResponse = await net.fetch(targetURL, {
+      const mediaURL = new URL(request.url)
+      if (mediaURL.hostname !== 'stream') {
+        return new Response('Unknown media route', { status: 404 })
+      }
+
+      const route = `/stream${mediaURL.pathname}${mediaURL.search}`
+      if (!/^\/stream\/[a-fA-F0-9]{40}(?:(?:\/\d+)|(?:\/subtitle\/\d+))?(?:\?|$)/.test(route)) {
+        return new Response('Invalid media request', { status: 400 })
+      }
+
+      targetURL = new URL(route, baseURL).toString()
+      return await net.fetch(targetURL, {
         method: request.method,
         headers: request.headers
       })
-      return fetchResponse
     } catch (err) {
-      console.error(`[Protocol] Error fetching ${targetURL}:`, err)
+      console.error(`[Protocol] Error fetching ${targetURL || request.url}:`, err)
       return new Response('Stream error', { status: 500 })
     }
   })
@@ -151,7 +208,7 @@ app.whenReady().then(async () => {
   // 7. Register all IPC handlers
   setupWindowIPC(window)
   setupTorrentIPC(window, torrentManager, streamServer)
-  setupCacheIPC(cacheManager)
+  setupCacheIPC(cacheManager, torrentManager)
   registerSearchHandlers()
 
   // 8. Restore persistent downloads from the previous session
@@ -165,6 +222,9 @@ app.whenReady().then(async () => {
       createWindow()
     }
   })
+}).catch((error) => {
+  console.error('[Main] Initialization failed:', error)
+  app.quit()
 })
 
 // ─── Application lifecycle cleanup ──────────────────────────────────
@@ -176,7 +236,7 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', async () => {
+async function shutdown(): Promise<void> {
   console.log('[Main] Shutting down...')
 
   // Destroy the torrent client (stops all torrents, removes temp data)
@@ -191,6 +251,16 @@ app.on('before-quit', async () => {
 
   // Final cache cleanup — remove stale files
   if (cacheManager) {
-    await cacheManager.cleanupOldFiles()
+    await cacheManager.cleanupOnExit()
   }
+}
+
+app.on('before-quit', (event) => {
+  if (shutdownStarted) return
+
+  event.preventDefault()
+  shutdownStarted = true
+  void shutdown()
+    .catch((error) => console.error('[Main] Shutdown failed:', error))
+    .finally(() => app.quit())
 })

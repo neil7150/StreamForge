@@ -37,6 +37,12 @@ func Created(c *fiber.Ctx, data interface{}) error {
 
 // Paginated sends a 200 response with pagination metadata.
 func Paginated(c *fiber.Ctx, data interface{}, page, perPage int, total int64) error {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 1
+	}
 	totalPages := int(total) / perPage
 	if int(total)%perPage > 0 {
 		totalPages++

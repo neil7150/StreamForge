@@ -5,13 +5,15 @@
 
 import { create } from 'zustand'
 
-interface WatchHistoryEntry {
+export interface WatchHistoryEntry {
   movieId: string
   slug: string
   title: string
   poster: string
   watchedAt: number // timestamp
   progress: number  // 0-1, how far they watched
+  currentTime?: number
+  duration?: number
   magnetURI: string
 }
 

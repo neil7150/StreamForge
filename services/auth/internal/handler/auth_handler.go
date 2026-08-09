@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"streamforge/pkg/auth"
-	"streamforge/pkg/response"
+	"streamforge.local/pkg/auth"
+	"streamforge.local/pkg/response"
 	"streamforge/services/auth/internal/dto"
 	"streamforge/services/auth/internal/repository"
 	"streamforge/services/auth/internal/service"

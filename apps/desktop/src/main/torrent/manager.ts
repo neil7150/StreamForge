@@ -17,17 +17,96 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import os from 'node:os'
 import { promises as fs } from 'node:fs'
+import type { Readable } from 'node:stream'
 import { app } from 'electron'
+import { appendFallbackTrackers } from '../search/provider-policy'
+import { RollingPieceStore } from './rolling-piece-store'
+import {
+  buildPeerConnectionDiagnostics,
+  createPeerDiscoveryStats,
+  describeConnectedPeer,
+  recordPeerDiscovery,
+  type PeerConnectionDiagnostics,
+  type PeerDiscoveryStats
+} from './peer-transport-policy'
+import {
+  calculateMetadataTailPieceRange,
+  calculateStartupCriticalEndPiece,
+  calculateStartupBufferBytes,
+  calculateStreamWindow,
+  FALLBACK_STARTUP_BUFFER_BYTES,
+  MAX_AHEAD_SECONDS,
+  RETAINED_BEHIND_SECONDS
+} from './stream-policy'
 
-// WebTorrent v2.x is ESM-only — must use dynamic import()
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let WebTorrent: any
+interface TorrentFileHandle {
+  name: string
+  path: string
+  length: number
+  progress?: number
+  offset: number
+  select(): void
+  deselect(): void
+  createReadStream(options: { start: number; end: number }): Readable
+}
+
+interface ManagedTorrent {
+  infoHash: string
+  magnetURI: string
+  name: string
+  path: string
+  files: TorrentFileHandle[]
+  ready: boolean
+  length: number
+  progress: number
+  downloadSpeed: number
+  uploadSpeed: number
+  numPeers: number
+  downloaded: number
+  uploaded: number
+  timeRemaining: number
+  ratio: number
+  pieceLength: number
+  pieces: unknown[]
+  wires?: Array<{ type?: string }>
+  _peers?: Map<string, { id?: string; type?: string; source?: string | null; retries?: number }>
+  sequential?: boolean
+  discovery?: {
+    tracker?: { update(): void } | null
+  } | null
+  on(event: string, listener: (...args: any[]) => void): void
+  once(event: string, listener: (...args: any[]) => void): void
+  removeListener(event: string, listener: (...args: any[]) => void): void
+  destroy(options: { destroyStore: boolean }, callback: (error?: Error) => void): void
+  critical(start: number, end: number): void
+  select(start: number, end: number, priority?: number): void
+  deselect(start: number, end: number): void
+}
+
+interface TorrentClient {
+  torrents: ManagedTorrent[]
+  add(magnetURI: string, options: { path: string; deselect?: boolean; strategy?: 'sequential' | 'rarest'; store?: typeof RollingPieceStore; storeCacheSlots?: number }): ManagedTorrent
+  on(event: string, listener: (...args: any[]) => void): void
+  destroy(callback: (error?: Error) => void): void
+}
+
+interface TorrentClientConstructor {
+  new (options?: {
+    utp?: boolean
+    maxConns?: number
+    tracker?: { getAnnounceOpts?: () => { numwant: number } }
+  }): TorrentClient
+}
+
+// WebTorrent v2.x is ESM-only — must use dynamic import().
+let WebTorrent: TorrentClientConstructor
 
 // ─── Video file extensions we consider streamable ────────────────────
 const VIDEO_EXTENSIONS = new Set([
   '.mp4', '.mkv', '.avi', '.webm', '.mov', '.m4v',
   '.ts', '.ogv', '.flv', '.wmv', '.3gp', '.mpg', '.mpeg'
 ])
+const TAIL_METADATA_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov'])
 
 // ─── Types matching the preload's exported interfaces ────────────────
 
@@ -63,6 +142,7 @@ export interface TorrentProgress {
   ratio: number
   bufferProgress: number
   mode: TorrentMode
+  peerConnections: PeerConnectionDiagnostics
 }
 
 /** Tracks per-torrent state (selected file index, throttle timer, mode, etc.) */
@@ -70,6 +150,18 @@ interface TorrentState {
   selectedFileIndex: number
   progressTimer: ReturnType<typeof setInterval> | null
   mode: TorrentMode
+  selectedPieceRange: { start: number; end: number } | null
+  metadataPieceRange: { start: number; end: number } | null
+  evictingPieces: Set<number>
+  lastDownloaded: number
+  lastProgressAt: number
+  stallReported: boolean
+  mediaDuration: number
+}
+
+interface StreamWindow {
+  start: number
+  end: number
 }
 
 /** Persisted download entry saved to downloads.json */
@@ -81,7 +173,7 @@ interface DownloadManifestEntry {
 }
 
 export class TorrentManager extends EventEmitter {
-  private client: any = null
+  private client!: TorrentClient
   private streamBaseURL: string = ''
   private initialized: boolean = false
 
@@ -94,6 +186,14 @@ export class TorrentManager extends EventEmitter {
 
   /** Per-torrent metadata keyed by infoHash */
   private torrentStates: Map<string, TorrentState> = new Map()
+  /** Hashes deliberately stopped by the user; their late events are ignored. */
+  private intentionallyRemoved: Set<string> = new Set()
+  /** Mode requested while a torrent is still waiting for metadata. */
+  private pendingModes: WeakMap<ManagedTorrent, TorrentMode> = new WeakMap()
+  /** Metadata deadlines keyed by info hash so removal can cancel them. */
+  private metadataDeadlines: Map<string, ReturnType<typeof setTimeout>> = new Map()
+  /** Cumulative discovery counters kept separately from WebTorrent's live wire list. */
+  private peerDiscoveryStats: WeakMap<ManagedTorrent, PeerDiscoveryStats> = new WeakMap()
 
   constructor() {
     super()
@@ -117,8 +217,14 @@ export class TorrentManager extends EventEmitter {
     await fs.mkdir(this.downloadPath, { recursive: true })
 
     const mod = await import('webtorrent')
-    WebTorrent = mod.default || mod
-    this.client = new WebTorrent()
+    WebTorrent = (mod.default || mod) as TorrentClientConstructor
+    // Keep both BitTorrent transports available. Per-peer fallback policy below
+    // switches an unsuccessful uTP attempt to TCP after its first 5s timeout.
+    this.client = new WebTorrent({
+      utp: true,
+      maxConns: 80,
+      tracker: { getAnnounceOpts: () => ({ numwant: 80 }) }
+    })
 
     // Global client error handler
     this.client.on('error', (err: Error) => {
@@ -178,12 +284,15 @@ export class TorrentManager extends EventEmitter {
    */
   async cleanupStream(infoHash: string): Promise<void> {
     const state = this.torrentStates.get(infoHash)
-    if (!state || state.mode !== 'stream') return
+    if (state && state.mode !== 'stream') return
 
-    // Stop progress reporting
-    if (state.progressTimer) {
+    this.suppressRemovalEvents(infoHash)
+    this.clearMetadataDeadline(infoHash)
+    if (state?.progressTimer) {
       clearInterval(state.progressTimer)
     }
+
+    // Stop progress reporting
     this.torrentStates.delete(infoHash)
 
     const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
@@ -225,6 +334,20 @@ export class TorrentManager extends EventEmitter {
   }
 
   // ─── Public API: Downloads (Persistent) ────────────────────────────
+
+  /** Stops every ephemeral stream before its cache files are cleared. */
+  async cleanupAllStreams(): Promise<void> {
+    const hashes = this.client.torrents
+      .filter((torrent) => {
+        const mode = this.torrentStates.get(torrent.infoHash)?.mode
+          ?? this.pendingModes.get(torrent)
+        return mode === 'stream'
+      })
+      .map((torrent) => torrent.infoHash)
+      .filter(Boolean)
+
+    await Promise.all(hashes.map((infoHash) => this.cleanupStream(infoHash)))
+  }
 
   /**
    * Add a torrent in DOWNLOAD mode — persistent, full parallel download.
@@ -304,34 +427,40 @@ export class TorrentManager extends EventEmitter {
    * For streams: destroys torrent + deletes temp files.
    * For downloads: destroys torrent but keeps files. Removes from manifest.
    */
-  removeTorrent(infoHash: string): void {
+  async removeTorrent(infoHash: string): Promise<void> {
+    this.suppressRemovalEvents(infoHash)
+    this.clearMetadataDeadline(infoHash)
     const state = this.torrentStates.get(infoHash)
-    if (state?.progressTimer) {
-      clearInterval(state.progressTimer)
-    }
+    if (state?.progressTimer) clearInterval(state.progressTimer)
 
     const isDownload = state?.mode === 'download'
     this.torrentStates.delete(infoHash)
 
-    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
+    const torrent = this.client.torrents.find((candidate) => candidate.infoHash === infoHash)
     if (torrent) {
-      // For streams: destroyStore=true (delete temp files)
-      // For downloads: destroyStore=false (keep the downloaded files)
-      torrent.destroy({ destroyStore: !isDownload }, (err) => {
-        if (err) {
-          console.error(`[TorrentManager] Error destroying ${infoHash}:`, err.message)
-        } else {
-          console.log(`[TorrentManager] Removed torrent ${infoHash} (mode: ${state?.mode || 'unknown'})`)
-        }
+      const torrentName = torrent.name
+      await new Promise<void>((resolve) => {
+        torrent.destroy({ destroyStore: !isDownload }, (error) => {
+          if (error) {
+            console.error(`[TorrentManager] Error destroying ${infoHash}:`, error.message)
+          } else {
+            console.log(`[TorrentManager] Removed torrent ${infoHash} (mode: ${state?.mode || 'unknown'})`)
+          }
+          resolve()
+        })
       })
+
+      if (!isDownload && torrentName) {
+        try {
+          await fs.rm(path.join(this.streamPath, torrentName), { recursive: true, force: true })
+        } catch {
+          // The rolling store may already have removed the directory.
+        }
+      }
     }
 
-    // Update download manifest if it was a download
-    if (isDownload) {
-      this.saveDownloadManifest()
-    }
+    if (isDownload) await this.saveDownloadManifest()
   }
-
   /**
    * Returns info for ALL active torrents (both modes).
    */
@@ -345,10 +474,6 @@ export class TorrentManager extends EventEmitter {
    * Returns the stream URL for a torrent using the custom media:// protocol.
    */
   getStreamURL(infoHash: string): string {
-    if (this.streamBaseURL) {
-      return `${this.streamBaseURL}/stream/${infoHash}`
-    }
-
     return `media://stream/${infoHash}`
   }
 
@@ -357,77 +482,167 @@ export class TorrentManager extends EventEmitter {
    * Returns the updated stream URL.
    */
   selectFile(infoHash: string, fileIndex: number): string {
-    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
-    if (!torrent) {
-      throw new Error(`Torrent not found: ${infoHash}`)
+    if (!Number.isInteger(fileIndex)) {
+      throw new Error('File index must be an integer')
     }
-
+    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
+    if (!torrent) throw new Error(`Torrent not found: ${infoHash}`)
     if (fileIndex < 0 || fileIndex >= torrent.files.length) {
       throw new Error(`Invalid file index: ${fileIndex}`)
     }
 
-    // Deselect all, select the new file
-    torrent.files.forEach((f) => f.deselect())
-    torrent.files[fileIndex].select()
-
     const state = this.torrentStates.get(infoHash)
     if (state) {
       state.selectedFileIndex = fileIndex
+      if (state.mode === 'stream') {
+        this.selectStreamWindow(torrent, state, fileIndex, 0, FALLBACK_STARTUP_BUFFER_BYTES)
+      }
     }
 
     const baseURL = this.getStreamURL(infoHash)
     const separator = baseURL.includes('?') ? '&' : '?'
-
-    // Force the renderer video element to reload when the selected file changes.
     return `${baseURL}${separator}fileIndex=${fileIndex}&t=${Date.now()}`
   }
 
-  /**
-   * Notify the torrent engine about a seek so it can reprioritize pieces.
-   * `positionPercent` is a value between 0 and 1.
-   */
-  notifySeek(infoHash: string, positionPercent: number): void {
+  /** Keep a bounded, bitrate-aware rolling cache window around the playhead. */
+  updatePlaybackPosition(infoHash: string, currentTime: number, duration: number): void {
     const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
-    if (!torrent) return
-
     const state = this.torrentStates.get(infoHash)
-    if (!state) return
+    if (
+      !torrent
+      || !state
+      || state.mode !== 'stream'
+      || !Number.isFinite(currentTime)
+      || !Number.isFinite(duration)
+      || duration <= 0
+    ) return
+
+    const file = torrent.files[state.selectedFileIndex]
+    if (!file || file.length <= 0) return
+
+    state.mediaDuration = duration
+    const policy = calculateStreamWindow({
+      fileLength: file.length,
+      duration,
+      currentTime,
+      downloadSpeed: torrent.downloadSpeed,
+      recentlyStalled: state.stallReported
+    })
+
+    this.selectStreamWindow(torrent, state, state.selectedFileIndex, policy.startByte, policy.endByte)
+    this.evictExpiredStreamPieces(torrent, state, file, policy.startByte)
+  }
+
+  /** Move the rolling window as FFmpeg consumes source bytes during transcoding. */
+  updateStreamBytePosition(infoHash: string, currentByte: number, duration: number): void {
+    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state || state.mode !== 'stream' || !Number.isFinite(currentByte)) return
+
+    const file = torrent.files[state.selectedFileIndex]
+    if (!file || file.length <= 0) return
+
+    const safeByte = Math.max(0, Math.min(file.length - 1, Math.floor(currentByte)))
+    const bytesPerSecond = Number.isFinite(duration) && duration > 0
+      ? file.length / duration
+      : FALLBACK_STARTUP_BUFFER_BYTES / MAX_AHEAD_SECONDS
+    const retainedStart = Math.floor(Math.max(0, safeByte - RETAINED_BEHIND_SECONDS * bytesPerSecond))
+    const windowEnd = Math.ceil(Math.min(file.length - 1, safeByte + MAX_AHEAD_SECONDS * bytesPerSecond))
+
+    this.selectStreamWindow(torrent, state, state.selectedFileIndex, retainedStart, windowEnd)
+    this.evictExpiredStreamPieces(torrent, state, file, retainedStart)
+  }
+  /** Returns the selected stream window in file-relative byte offsets. */
+  getStreamWindow(infoHash: string): StreamWindow | null {
+    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state || state.mode !== 'stream' || !state.selectedPieceRange) return null
+
+    const file = torrent.files[state.selectedFileIndex]
+    if (!file) return null
+
+    const start = Math.max(0, state.selectedPieceRange.start * torrent.pieceLength - file.offset)
+    const end = Math.min(file.length - 1, ((state.selectedPieceRange.end + 1) * torrent.pieceLength) - file.offset - 1)
+    return end >= start ? { start, end } : null
+  }
+
+  /** Apply bitrate-aware startup priority as soon as FFprobe knows the duration. */
+  configureStreamMedia(infoHash: string, duration: number): void {
+    if (!Number.isFinite(duration) || duration <= 0) return
+    const torrent = this.client.torrents.find((candidate) => candidate.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state || state.mode !== 'stream') return
+    const file = torrent.files[state.selectedFileIndex]
+    if (!file || file.length <= 0) return
+
+    const hadDuration = state.mediaDuration > 0
+    state.mediaDuration = duration
+    const firstFilePiece = Math.floor(file.offset / torrent.pieceLength)
+    if (hadDuration || state.selectedPieceRange?.start !== firstFilePiece) return
+
+    const bytesPerSecond = file.length / duration
+    const startupBytes = calculateStartupBufferBytes(bytesPerSecond)
+    this.selectStreamWindow(torrent, state, state.selectedFileIndex, 0, startupBytes)
+  }
+
+  /** Briefly prioritize container metadata near the end of MP4-style files. */
+  prioritizeStreamMetadata(infoHash: string): void {
+    const torrent = this.client.torrents.find((candidate) => candidate.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state || state.mode !== 'stream' || state.metadataPieceRange) return
+    const file = torrent.files[state.selectedFileIndex]
+    if (!file) return
+    if (!TAIL_METADATA_EXTENSIONS.has(path.extname(file.name).toLowerCase())) return
+
+    const range = calculateMetadataTailPieceRange(
+      file.offset,
+      file.length,
+      torrent.pieceLength,
+      state.selectedPieceRange?.end
+    )
+    if (!range) return
+    torrent.select(range.start, range.end, 5)
+    torrent.critical(range.start, range.start)
+    state.metadataPieceRange = range
+  }
+
+  /** Stop requesting the temporary metadata tail after probing completes. */
+  releaseStreamMetadata(infoHash: string): void {
+    const torrent = this.client.torrents.find((candidate) => candidate.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state?.metadataPieceRange) return
+    torrent.deselect(state.metadataPieceRange.start, state.metadataPieceRange.end)
+    state.metadataPieceRange = null
+  }
+
+  /** Prioritize a seek immediately until the next playback update arrives. */
+  notifySeek(infoHash: string, positionPercent: number): void {
+    if (!Number.isFinite(positionPercent)) return
+    const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
+    const state = this.torrentStates.get(infoHash)
+    if (!torrent || !state || state.mode !== 'stream') return
 
     const file = torrent.files[state.selectedFileIndex]
     if (!file) return
 
-    const pieceLength = torrent.pieceLength
-    const totalPieces = torrent.pieces.length
     const seekByte = Math.floor(file.length * Math.max(0, Math.min(1, positionPercent)))
-    const seekPiece = Math.floor(seekByte / pieceLength)
-
-    const windowSize = Math.min(50, Math.ceil(totalPieces * 0.05))
-    const startPiece = Math.max(0, seekPiece - 2)
-    const endPiece = Math.min(totalPieces - 1, seekPiece + windowSize)
-
-    for (let i = startPiece; i <= endPiece; i++) {
-      torrent.critical(i, i)
-    }
-
-    console.log(
-      `[TorrentManager] Seek: ${infoHash} → ${Math.round(positionPercent * 100)}% ` +
-        `(pieces ${startPiece}-${endPiece})`
+    const bytesPerSecond = state.mediaDuration > 0 ? file.length / state.mediaDuration : undefined
+    const startupBytes = calculateStartupBufferBytes(bytesPerSecond)
+    this.selectStreamWindow(
+      torrent,
+      state,
+      state.selectedFileIndex,
+      Math.max(0, seekByte - startupBytes / 4),
+      Math.min(file.length - 1, seekByte + startupBytes)
     )
   }
-
-  /**
-   * Returns the WebTorrent File object for the selected file in a torrent.
-   */
-  getSelectedFile(infoHash: string): any {
+  /** Returns the WebTorrent File object for the selected file in a torrent. */
+  getSelectedFile(infoHash: string): TorrentFileHandle | null {
     const torrent = this.client.torrents.find((t) => t.infoHash === infoHash)
-    if (!torrent) return null
-
     const state = this.torrentStates.get(infoHash)
-    if (!state) return null
-
+    if (!torrent || !state) return null
     return torrent.files[state.selectedFileIndex] || null
   }
-
   /**
    * Returns the absolute disk path for the selected file in a torrent.
    * WebTorrent stores files at: <path>/<file.path>
@@ -438,7 +653,7 @@ export class TorrentManager extends EventEmitter {
     if (!torrent) return null
 
     const state = this.torrentStates.get(infoHash)
-    if (!state) return null
+    if (!state || state.mode === 'stream') return null
 
     const file = torrent.files[state.selectedFileIndex]
     if (!file) return null
@@ -481,6 +696,11 @@ export class TorrentManager extends EventEmitter {
     }
     this.torrentStates.clear()
 
+    for (const timer of this.metadataDeadlines.values()) {
+      clearTimeout(timer)
+    }
+    this.metadataDeadlines.clear()
+
     return new Promise((resolve) => {
       this.client.destroy((err) => {
         if (err) {
@@ -495,6 +715,14 @@ export class TorrentManager extends EventEmitter {
   // ─── Core torrent add logic (shared by stream & download) ─────────
 
   private _addTorrent(magnetURI: string, mode: TorrentMode): Promise<TorrentInfo> {
+    if (!magnetURI.startsWith('magnet:?') || magnetURI.length > 16_384) {
+      return Promise.reject(new Error('Invalid magnet URI'))
+    }
+    magnetURI = appendFallbackTrackers(magnetURI)
+    if (magnetURI.length > 16_384) {
+      return Promise.reject(new Error('Magnet URI is too long'))
+    }
+
     const targetPath = mode === 'stream' ? this.streamPath : this.downloadPath
 
     return new Promise((resolve, reject) => {
@@ -502,6 +730,50 @@ export class TorrentManager extends EventEmitter {
       const hashMatch = magnetURI.match(/btih:([a-fA-F0-9]{40})/i)
         || magnetURI.match(/btih:([a-zA-Z2-7]{32})/i)
       const incomingHash = hashMatch ? hashMatch[1].toLowerCase() : null
+
+      const waitForExistingTorrent = (candidate: ManagedTorrent): void => {
+        if (candidate.ready) {
+          console.log(`[TorrentManager] Reusing existing torrent: ${candidate.infoHash} (${mode})`)
+          resolve(this.buildTorrentInfo(candidate))
+          return
+        }
+
+        let settled = false
+        const cleanup = () => {
+          candidate.removeListener('ready', onReady)
+          candidate.removeListener('error', onError)
+          candidate.removeListener('close', onClose)
+        }
+        const onReady = () => {
+          if (settled) return
+          settled = true
+          cleanup()
+          resolve(this.buildTorrentInfo(candidate))
+        }
+        const onError = (error: Error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          reject(error)
+        }
+        const onClose = () => {
+          if (settled) return
+          settled = true
+          cleanup()
+          const hash = candidate.infoHash || incomingHash || ''
+          reject(new Error(
+            hash && this.intentionallyRemoved.has(hash)
+              ? 'STREAM_CANCELLED'
+              : 'Torrent closed before metadata became ready'
+          ))
+        }
+
+        console.log(`[TorrentManager] Waiting for existing torrent: ${candidate.infoHash || incomingHash || 'pending'}`)
+        candidate.once('ready', onReady)
+        candidate.once('error', onError)
+        candidate.once('close', onClose)
+        if (candidate.ready) onReady()
+      }
 
       // Prevent duplicate additions
       const existing = this.client.torrents.find((t) => {
@@ -512,20 +784,33 @@ export class TorrentManager extends EventEmitter {
       })
 
       if (existing) {
-        if (existing.ready) {
-          console.log(`[TorrentManager] Reusing existing torrent: ${existing.infoHash} (${mode})`)
-          resolve(this.buildTorrentInfo(existing))
-        } else {
-          console.log(`[TorrentManager] Waiting for existing torrent: ${existing.infoHash}`)
-          existing.once('ready', () => resolve(this.buildTorrentInfo(existing)))
-          existing.once('error', (err) => reject(err))
+        const existingMode = this.torrentStates.get(existing.infoHash)?.mode
+          ?? this.pendingModes.get(existing)
+        if (existingMode && existingMode !== mode) {
+          reject(new Error(
+            'Torrent is already active in ' + existingMode
+              + ' mode. Remove it before adding it in ' + mode + ' mode.'
+          ))
+          return
         }
+        waitForExistingTorrent(existing)
         return
       }
 
-      let torrent: any
+      let torrent: ManagedTorrent
       try {
-        torrent = this.client.add(magnetURI, { path: targetPath })
+        const options = mode === 'stream'
+          ? {
+              path: targetPath,
+              deselect: true,
+              strategy: 'sequential' as const,
+              store: RollingPieceStore,
+              storeCacheSlots: 0
+            }
+          : { path: targetPath }
+        torrent = this.client.add(magnetURI, options)
+        this.pendingModes.set(torrent, mode)
+        this.peerDiscoveryStats.set(torrent, createPeerDiscoveryStats())
       } catch (err: any) {
         const msg = err?.message || String(err)
         if (msg.includes('duplicate') || msg.includes('Cannot add')) {
@@ -533,12 +818,16 @@ export class TorrentManager extends EventEmitter {
             ? this.client.torrents.find((t) => t.infoHash.toLowerCase() === incomingHash)
             : null
           if (fallback) {
-            if (fallback.ready) {
-              resolve(this.buildTorrentInfo(fallback))
-            } else {
-              fallback.once('ready', () => resolve(this.buildTorrentInfo(fallback)))
-              fallback.once('error', (e) => reject(e))
+            const fallbackMode = this.torrentStates.get(fallback.infoHash)?.mode
+              ?? this.pendingModes.get(fallback)
+            if (fallbackMode && fallbackMode !== mode) {
+              reject(new Error(
+                'Torrent is already active in ' + fallbackMode
+                  + ' mode. Remove it before adding it in ' + mode + ' mode.'
+              ))
+              return
             }
+            waitForExistingTorrent(fallback)
             return
           }
         }
@@ -546,7 +835,61 @@ export class TorrentManager extends EventEmitter {
         return
       }
 
+      let discoveredPeerCount = 0
+      const discoveryRefreshTimers: Array<ReturnType<typeof setTimeout>> = []
+      const clearDiscoveryRefreshTimers = (): void => {
+        for (const timer of discoveryRefreshTimers) clearTimeout(timer)
+        discoveryRefreshTimers.length = 0
+      }
+      const refreshDiscovery = (): void => {
+        if (torrent.ready) return
+        try {
+          torrent.discovery?.tracker?.update()
+          console.log(`[TorrentManager] Refreshed tracker discovery: ${torrent.infoHash || incomingHash || 'unknown'}`)
+        } catch (error) {
+          console.warn('[TorrentManager] Tracker refresh failed:', error)
+        }
+      }
+      if (mode === 'stream') {
+        discoveryRefreshTimers.push(setTimeout(refreshDiscovery, 10_000))
+        discoveryRefreshTimers.push(setTimeout(refreshDiscovery, 25_000))
+      }
+
+      const metadataDeadline = mode === 'stream'
+        ? setTimeout(() => {
+            if (torrent.ready) return
+            clearDiscoveryRefreshTimers()
+            this.clearMetadataDeadline(torrent.infoHash || incomingHash)
+            const error = new Error(
+              discoveredPeerCount === 0
+                ? 'No reachable peers were found within 45 seconds. The displayed seed count may be stale; try another source or network.'
+                : torrent.numPeers === 0
+                  ? `Found ${discoveredPeerCount} peer address${discoveredPeerCount === 1 ? '' : 'es'}, but none completed a connection. Try another source or network.`
+                  : `Connected to ${torrent.numPeers} peer${torrent.numPeers === 1 ? '' : 's'}, but none supplied torrent metadata. Try another source.`
+            )
+            console.warn(`[TorrentManager] Metadata timeout: ${torrent.infoHash || 'unknown'}`)
+            this.emit('torrent:error', { infoHash: torrent.infoHash || incomingHash || 'unknown', error: error.message })
+            torrent.destroy({ destroyStore: true }, () => {})
+            reject(error)
+          }, 45_000)
+        : null
+      if (metadataDeadline) {
+        this.setMetadataDeadline(torrent.infoHash || incomingHash, metadataDeadline)
+      }
+
+      torrent.on('peer', (peer) => {
+        discoveredPeerCount += 1
+        const discovery = this.peerDiscoveryStats.get(torrent)
+        if (discovery) recordPeerDiscovery(discovery, torrent, peer)
+      })
+      torrent.on('wire', (wire, peerAddress) => {
+        const route = describeConnectedPeer(torrent, peerAddress, wire?.type)
+        console.log(`[TorrentManager] Peer connected: ${torrent.infoHash} (${torrent.numPeers} active, ${route})`)
+      })
       torrent.on('ready', () => {
+        clearDiscoveryRefreshTimers()
+        if (metadataDeadline) clearTimeout(metadataDeadline)
+        this.clearMetadataDeadline(torrent.infoHash || incomingHash)
         // Stream mode: sequential for playback. Download mode: parallel for speed.
         if (mode === 'stream') {
           ;(torrent as any).sequential = true
@@ -562,18 +905,22 @@ export class TorrentManager extends EventEmitter {
         const selectedFile = torrent.files[fileIndex]
         console.log(`[TorrentManager] Selected file [${fileIndex}]: ${selectedFile?.name || 'NONE'}`)
 
-        this.torrentStates.set(torrent.infoHash, {
+        const state: TorrentState = {
           selectedFileIndex: fileIndex,
           progressTimer: null,
-          mode
-        })
+          mode,
+          selectedPieceRange: null,
+          metadataPieceRange: null,
+          evictingPieces: new Set(),
+          lastDownloaded: torrent.downloaded,
+          lastProgressAt: Date.now(),
+          stallReported: false,
+          mediaDuration: 0
+        }
+        this.torrentStates.set(torrent.infoHash, state)
 
-        if (mode === 'stream') {
-          // Stream: deselect all files, only download the selected one
-          torrent.files.forEach((f) => f.deselect())
-          if (fileIndex >= 0 && fileIndex < torrent.files.length) {
-            torrent.files[fileIndex].select()
-          }
+        if (mode === 'stream' && fileIndex >= 0 && fileIndex < torrent.files.length) {
+          this.selectStreamWindow(torrent, state, fileIndex, 0, FALLBACK_STARTUP_BUFFER_BYTES)
         }
         // Download mode: let all files download (default WebTorrent behavior)
 
@@ -589,6 +936,10 @@ export class TorrentManager extends EventEmitter {
       })
 
       torrent.on('error', (err: Error) => {
+        clearDiscoveryRefreshTimers()
+        if (metadataDeadline) clearTimeout(metadataDeadline)
+        this.clearMetadataDeadline(torrent.infoHash || incomingHash)
+        if (this.intentionallyRemoved.has(torrent.infoHash)) return
         const errorInfo = {
           infoHash: torrent.infoHash || 'unknown',
           error: err.message
@@ -600,12 +951,96 @@ export class TorrentManager extends EventEmitter {
       torrent.on('warning', (warn: Error) => {
         console.warn(`[TorrentManager] Warning (${torrent.infoHash}):`, warn.message)
       })
+
+      torrent.once('close', () => {
+        clearDiscoveryRefreshTimers()
+        if (metadataDeadline) clearTimeout(metadataDeadline)
+        this.clearMetadataDeadline(torrent.infoHash || incomingHash)
+        if (this.intentionallyRemoved.has(torrent.infoHash)) {
+          reject(new Error('STREAM_CANCELLED'))
+        }
+      })
     })
   }
 
   // ─── Private helpers ───────────────────────────────────────────────
 
-  private findLargestVideoFile(torrent: any): number {
+  private suppressRemovalEvents(infoHash: string): void {
+    this.intentionallyRemoved.add(infoHash)
+    setTimeout(() => this.intentionallyRemoved.delete(infoHash), 5_000)
+  }
+
+  private setMetadataDeadline(infoHash: string | null, timer: ReturnType<typeof setTimeout>): void {
+    if (!infoHash) return
+    const key = infoHash.toLowerCase()
+    this.clearMetadataDeadline(key)
+    this.metadataDeadlines.set(key, timer)
+  }
+
+  private clearMetadataDeadline(infoHash: string | null): void {
+    if (!infoHash) return
+    const key = infoHash.toLowerCase()
+    const timer = this.metadataDeadlines.get(key)
+    if (timer) clearTimeout(timer)
+    this.metadataDeadlines.delete(key)
+  }
+
+  private selectStreamWindow(
+    torrent: ManagedTorrent,
+    state: TorrentState,
+    fileIndex: number,
+    startByte: number,
+    endByte: number
+  ): void {
+    const file = torrent.files[fileIndex]
+    if (!file || file.length <= 0) return
+
+    const from = Math.max(0, Math.min(file.length - 1, Math.floor(startByte)))
+    const to = Math.max(from, Math.min(file.length - 1, Math.ceil(endByte)))
+    const startPiece = Math.floor((file.offset + from) / torrent.pieceLength)
+    const endPiece = Math.floor((file.offset + to) / torrent.pieceLength)
+
+    if (state.selectedPieceRange?.start === startPiece && state.selectedPieceRange.end === endPiece) return
+    if (state.selectedPieceRange) torrent.deselect(state.selectedPieceRange.start, state.selectedPieceRange.end)
+
+    torrent.select(startPiece, endPiece, 10)
+    torrent.critical(
+      startPiece,
+      calculateStartupCriticalEndPiece(startPiece, endPiece, torrent.pieceLength)
+    )
+    state.selectedPieceRange = { start: startPiece, end: endPiece }
+  }
+
+  private evictExpiredStreamPieces(
+    torrent: ManagedTorrent,
+    state: TorrentState,
+    file: TorrentFileHandle,
+    retainedStartByte: number
+  ): void {
+    const firstFilePiece = Math.floor(file.offset / torrent.pieceLength)
+    const retainedPiece = Math.floor((file.offset + retainedStartByte) / torrent.pieceLength)
+    const internalTorrent = torrent as ManagedTorrent & {
+      bitfield?: { get(index: number): boolean }
+      _markUnverified(index: number): void
+      store?: { store?: { delete(index: number, callback?: (error?: Error) => void): void } }
+    }
+    const pieceStore = internalTorrent.store?.store
+    if (!pieceStore || !internalTorrent.bitfield) return
+
+    for (let piece = firstFilePiece; piece < retainedPiece; piece++) {
+      if (!internalTorrent.bitfield.get(piece) || state.evictingPieces.has(piece)) continue
+      state.evictingPieces.add(piece)
+      pieceStore.delete(piece, (error) => {
+        state.evictingPieces.delete(piece)
+        if (error) {
+          console.warn(`[TorrentManager] Failed to evict stream piece ${piece}:`, error.message)
+          return
+        }
+        internalTorrent._markUnverified(piece)
+      })
+    }
+  }
+  private findLargestVideoFile(torrent: ManagedTorrent): number {
     let bestIndex = 0
     let bestSize = 0
 
@@ -620,7 +1055,7 @@ export class TorrentManager extends EventEmitter {
     return bestIndex
   }
 
-  private startProgressReporting(torrent: any): void {
+  private startProgressReporting(torrent: ManagedTorrent): void {
     const state = this.torrentStates.get(torrent.infoHash)
     if (!state) return
 
@@ -629,13 +1064,30 @@ export class TorrentManager extends EventEmitter {
     }
 
     state.progressTimer = setInterval(() => {
-      if (!torrent.ready) return
+      if (!torrent.ready || !this.torrentStates.has(torrent.infoHash)) return
 
       const progress = this.buildProgressData(torrent)
       this.emit('torrent:progress', progress)
 
-      // Stop reporting once fully downloaded
-      if (torrent.progress >= 1) {
+      if (torrent.downloaded > state.lastDownloaded) {
+        state.lastDownloaded = torrent.downloaded
+        state.lastProgressAt = Date.now()
+        state.stallReported = false
+      } else if (
+        state.mode === 'stream' &&
+        torrent.numPeers > 0 &&
+        Date.now() - state.lastProgressAt >= 30_000 &&
+        !state.stallReported
+      ) {
+        state.stallReported = true
+        const error = 'Stream stalled for 30 seconds despite connected peers. Retry the stream or choose another source.'
+        console.warn(`[TorrentManager] ${error} (${torrent.infoHash})`)
+        this.emit('torrent:error', { infoHash: torrent.infoHash, error })
+      }
+
+      // Persistent downloads are finished at 100%. Stream-mode torrents keep
+      // reporting because rolling eviction can make old pieces unverified again.
+      if (state.mode === 'download' && torrent.progress >= 1) {
         if (state.progressTimer) {
           clearInterval(state.progressTimer)
           state.progressTimer = null
@@ -644,7 +1096,7 @@ export class TorrentManager extends EventEmitter {
     }, 500)
   }
 
-  private buildTorrentInfo(torrent: any): TorrentInfo {
+  private buildTorrentInfo(torrent: ManagedTorrent): TorrentInfo {
     const state = this.torrentStates.get(torrent.infoHash)
     return {
       infoHash: torrent.infoHash,
@@ -662,7 +1114,7 @@ export class TorrentManager extends EventEmitter {
     }
   }
 
-  private buildProgressData(torrent: any): TorrentProgress {
+  private buildProgressData(torrent: ManagedTorrent): TorrentProgress {
     const state = this.torrentStates.get(torrent.infoHash)
     let bufferProgress = torrent.progress
 
@@ -683,7 +1135,11 @@ export class TorrentManager extends EventEmitter {
       timeRemaining: torrent.timeRemaining,
       ratio: torrent.ratio,
       bufferProgress,
-      mode: state?.mode || 'stream'
+      mode: state?.mode || 'stream',
+      peerConnections: buildPeerConnectionDiagnostics(
+        torrent,
+        this.peerDiscoveryStats.get(torrent)
+      )
     }
   }
 }

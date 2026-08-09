@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom API exposed to renderer via contextBridge
 const torrentAPI = {
@@ -33,11 +32,17 @@ const torrentAPI = {
   getStreamURL: (infoHash: string): Promise<string> =>
     ipcRenderer.invoke('torrent:stream-url', infoHash),
 
+  getMediaInfo: (infoHash: string): Promise<MediaInfo | null> =>
+    ipcRenderer.invoke('torrent:media-info', infoHash),
+
   selectFile: (infoHash: string, fileIndex: number): Promise<string> =>
     ipcRenderer.invoke('torrent:select-file', infoHash, fileIndex),
 
   notifySeek: (infoHash: string, position: number): Promise<void> =>
     ipcRenderer.invoke('torrent:seek', infoHash, position),
+
+  updatePlaybackPosition: (infoHash: string, currentTime: number, duration: number): Promise<void> =>
+    ipcRenderer.invoke('torrent:playback-position', infoHash, currentTime, duration),
 
   // ─── Events ──────────────────────────────────────────────────────
   onTorrentProgress: (callback: (data: TorrentProgress) => void) => {
@@ -59,8 +64,8 @@ const torrentAPI = {
   },
 
   // ─── Search ──────────────────────────────────────────────────────
-  searchNyaa: (query: string): Promise<any[]> =>
-    ipcRenderer.invoke('search:nyaa', query),
+  searchTorrents: (query: string): Promise<TorrentSearchResponse> =>
+    ipcRenderer.invoke('search:torrents', query),
 
   // ─── Cache management ────────────────────────────────────────────
   getCacheSize: (): Promise<number> =>
@@ -102,6 +107,70 @@ export interface TorrentInfo {
   mode: TorrentMode
 }
 
+export interface MediaAudioTrack {
+  index: number
+  codec: string
+  language: string
+  title: string | null
+  channels: number
+  channelLayout: string | null
+  isDefault: boolean
+}
+
+export interface MediaSubtitleTrack {
+  index: number
+  codec: string
+  language: string
+  title: string | null
+  isDefault: boolean
+  textBased: boolean
+}
+
+export interface MediaInfo {
+  videoCodec: string | null
+  audioCodec: string | null
+  audioTracks: MediaAudioTrack[]
+  subtitleTracks: MediaSubtitleTrack[]
+  duration: number
+  width: number
+  height: number
+  needsVideoTranscode: boolean
+  needsAudioTranscode: boolean
+  needsTranscode: boolean
+}
+
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+
+export interface TorrentSearchResult {
+  id: string
+  name: string
+  magnetURI: string
+  seeders: number
+  leechers: number
+  size: string
+  sizeBytes: number
+  category: string
+  added: string
+  provider: TorrentProviderName
+  qualityScore?: number
+}
+
+export interface TorrentProviderStatus {
+  name: TorrentProviderName
+  status: 'ok' | 'error' | 'cooldown'
+  count: number
+  error?: string
+  latencyMs?: number
+  consecutiveFailures?: number
+  retryAt?: number
+  fromCache?: boolean
+}
+
+export interface TorrentSearchResponse {
+  results: TorrentSearchResult[]
+  providers: TorrentProviderStatus[]
+  cache?: 'miss' | 'fresh' | 'stale'
+}
 export interface TorrentProgress {
   infoHash: string
   progress: number
@@ -115,20 +184,17 @@ export interface TorrentProgress {
   ratio: number
   bufferProgress: number
   mode: TorrentMode
+  peerConnections: PeerConnectionDiagnostics
 }
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled
-if (process.contextIsolated) {
-  try {
-    contextBridge.exposeInMainWorld('electron', electronAPI)
-    contextBridge.exposeInMainWorld('torrentAPI', torrentAPI)
-  } catch (error) {
-    console.error('Failed to expose APIs:', error)
-  }
-} else {
-  // @ts-ignore (define in dts)
-  window.electron = electronAPI
-  // @ts-ignore (define in dts)
-  window.torrentAPI = torrentAPI
+export interface PeerConnectionDiagnostics {
+  discovered: number
+  pending: number
+  connected: number
+  fastTcpFallbacksArmed: number
+  bySource: Record<'tracker' | 'dht' | 'lsd' | 'pex' | 'manual' | 'unknown', number>
+  byTransport: Record<'tcp' | 'utp' | 'webrtc' | 'webseed' | 'unknown', number>
 }
+
+// Expose only the narrow, explicitly defined application API.
+contextBridge.exposeInMainWorld('torrentAPI', torrentAPI)

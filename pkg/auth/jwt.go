@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // Claims represents the JWT claims for StreamForge.
@@ -52,7 +54,7 @@ func GenerateRefreshToken() string {
 // ValidateToken parses and validates a JWT, returning the claims.
 func ValidateToken(tokenString, secret string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return []byte(secret), nil
@@ -69,10 +71,34 @@ func ValidateToken(tokenString, secret string) (*Claims, error) {
 	return claims, nil
 }
 
+// TokenBlacklist checks whether a JWT ID has been revoked.
+type TokenBlacklist interface {
+	IsBlacklisted(ctx context.Context, jwtID string) (bool, error)
+}
+
+// RedisTokenBlacklist reads logout revocations from the shared auth Redis database.
+type RedisTokenBlacklist struct {
+	client *redis.Client
+}
+
+// NewRedisTokenBlacklist creates a Redis-backed token blacklist.
+func NewRedisTokenBlacklist(client *redis.Client) *RedisTokenBlacklist {
+	return &RedisTokenBlacklist{client: client}
+}
+
+// IsBlacklisted reports whether a JWT ID has been revoked.
+func (r *RedisTokenBlacklist) IsBlacklisted(ctx context.Context, jwtID string) (bool, error) {
+	count, err := r.client.Exists(ctx, "auth:blacklist:"+jwtID).Result()
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // AuthMiddleware returns a Fiber middleware that validates JWT tokens.
 // It extracts the token from the Authorization header (Bearer scheme)
 // and injects the user claims into the Fiber context.
-func AuthMiddleware(secret string) fiber.Handler {
+func AuthMiddleware(secret string, blacklist ...TokenBlacklist) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authHeader := c.Get("Authorization")
 		if authHeader == "" {
@@ -96,6 +122,22 @@ func AuthMiddleware(secret string) fiber.Handler {
 				"success": false,
 				"error":   fiber.Map{"code": "UNAUTHORIZED", "message": "Invalid or expired token"},
 			})
+		}
+
+		if len(blacklist) > 0 && claims.ID != "" {
+			revoked, err := blacklist[0].IsBlacklisted(c.Context(), claims.ID)
+			if err != nil {
+				return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+					"success": false,
+					"error":   fiber.Map{"code": "AUTH_UNAVAILABLE", "message": "Authentication service unavailable"},
+				})
+			}
+			if revoked {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+					"success": false,
+					"error":   fiber.Map{"code": "UNAUTHORIZED", "message": "Token has been revoked"},
+				})
+			}
 		}
 
 		// Store claims in context locals for downstream handlers
