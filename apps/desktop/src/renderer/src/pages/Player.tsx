@@ -12,10 +12,12 @@ import { formatBytes } from '../lib/utils'
 import { cancelScheduledStreamCleanup, scheduleStreamCleanup } from '../lib/stream-cleanup-scheduler'
 import { buildPlaybackDiagnosticsReport, type VideoElementDiagnostics } from '../lib/playback-diagnostics'
 import { formatResumeTime, getPlaybackResumeTime } from '../lib/playback-resume'
+import { createLatestTaskScheduler } from '../lib/latest-task-scheduler'
 
 type PlayerMediaInfo = NonNullable<Awaited<ReturnType<Window['torrentAPI']['getMediaInfo']>>>
 
 const PREFERRED_AUDIO_LANGUAGE_KEY = 'streamforge.preferredAudioLanguage'
+const RAPID_SKIP_RESTART_DELAY_MS = 350
 
 const SUBTITLE_LANGUAGE_NAMES: Record<string, string> = {
   ara: 'Arabic',
@@ -150,6 +152,10 @@ export default function Player() {
   const [lastPlaybackError, setLastPlaybackError] = useState<string | null>(null)
   const [resumeNoticeTime, setResumeNoticeTime] = useState<number | null>(null)
   const seekRequestRef = useRef(0)
+  const rapidSkipSchedulerRef = useRef<ReturnType<typeof createLatestTaskScheduler> | null>(null)
+  if (!rapidSkipSchedulerRef.current) {
+    rapidSkipSchedulerRef.current = createLatestTaskScheduler(RAPID_SKIP_RESTART_DELAY_MS)
+  }
   const playbackSessionRef = useRef(crypto.randomUUID())
   const currentPlaybackTimeRef = useRef(0)
   const connectionStartedAtRef = useRef(Date.now())
@@ -160,6 +166,10 @@ export default function Player() {
     resumeHashRef.current = infoHash
     initialHistoryEntryRef.current = savedHistoryEntry
   }
+
+  const cancelQueuedRapidSkip = useCallback(() => {
+    rapidSkipSchedulerRef.current?.cancel()
+  }, [])
 
   useEffect(() => {
     setPhaseStartedAt(Date.now())
@@ -174,6 +184,7 @@ export default function Player() {
 
   const handleRetry = useCallback(async () => {
     if (!infoHash) return
+    cancelQueuedRapidSkip()
     setError(null)
     setLoading(true)
     setStreamURL(null)
@@ -196,16 +207,17 @@ export default function Player() {
       setError(err instanceof Error ? err.message : 'Failed to retry the stream')
       setLoading(false)
     }
-  }, [infoHash, retryStream])
+  }, [cancelQueuedRapidSkip, infoHash, retryStream])
 
   const handleCancelConnection = useCallback(() => {
+    cancelQueuedRapidSkip()
     isCancellingRef.current = true
     if (infoHash) {
       cancelScheduledStreamCleanup(infoHash)
       void cleanupStream(infoHash)
     }
     navigate(-1)
-  }, [cleanupStream, infoHash, navigate])
+  }, [cancelQueuedRapidSkip, cleanupStream, infoHash, navigate])
   // Video file extensions for the file selector
   const videoExts = useMemo(() => new Set([
     // Modern containers
@@ -409,6 +421,7 @@ export default function Player() {
   const handleFileSelect = useCallback(
     async (fileIndex: number) => {
       if (!infoHash) return
+      cancelQueuedRapidSkip()
       setLoading(true)
       setShowFileSelector(false)
       try {
@@ -430,25 +443,31 @@ export default function Player() {
         setLoading(false)
       }
     },
-    [infoHash]
+    [cancelQueuedRapidSkip, infoHash]
   )
 
   // Compatibility streams restart only when the destination is outside the
   // browser's current buffer. Native streams and short buffered skips seek in place.
   const restartPlaybackAt = useCallback(
-    async (currentTime: number, audioTrackIndex: number | null) => {
+    async (
+      currentTime: number,
+      audioTrackIndex: number | null,
+      reservedRequestId?: number
+    ) => {
       if (!infoHash || !torrent) return
       const duration = mediaInfo?.duration
       if (!duration || duration <= 0 || !Number.isFinite(duration)) return
 
       const target = Math.max(0, Math.min(currentTime, Math.max(0, duration - 0.25)))
       const positionPercent = target / duration
-      const requestId = ++seekRequestRef.current
+      const requestId = reservedRequestId ?? ++seekRequestRef.current
       console.log(`[Player] Restart at ${target.toFixed(1)}s with audio track ${audioTrackIndex ?? 'default'}`)
 
       try {
-        await window.torrentAPI.notifySeek(infoHash, positionPercent)
-        await window.torrentAPI.updatePlaybackPosition(infoHash, target, duration)
+        await Promise.all([
+          window.torrentAPI.notifySeek(infoHash, positionPercent),
+          window.torrentAPI.updatePlaybackPosition(infoHash, target, duration)
+        ])
         if (requestId !== seekRequestRef.current) return
 
         const baseURL = await window.torrentAPI.getStreamURL(infoHash)
@@ -462,20 +481,42 @@ export default function Player() {
         }))
       } catch (seekError) {
         console.error('[Player] Playback restart failed:', seekError)
+        throw seekError
       }
     },
     [infoHash, torrent, mediaInfo]
   )
+
+  // Skip-button bursts reserve a generation immediately, but defer expensive
+  // torrent reprioritization and FFmpeg startup until the final target settles.
+  const restartAfterRapidSkip = useCallback(
+    (currentTime: number, audioTrackIndex: number | null): Promise<void> => {
+      cancelQueuedRapidSkip()
+      const requestId = ++seekRequestRef.current
+      return rapidSkipSchedulerRef.current!.schedule(
+        () => restartPlaybackAt(currentTime, audioTrackIndex, requestId)
+      )
+    },
+    [cancelQueuedRapidSkip, restartPlaybackAt]
+  )
+
+  useEffect(() => () => cancelQueuedRapidSkip(), [cancelQueuedRapidSkip])
 
   const handleSeeking = useCallback(
     async (currentTime: number, request: PlaybackSeekRequest) => {
       setResumeNoticeTime(null)
       setLastSeekTarget(currentTime)
       if (request.requiresRestart) {
-        await restartPlaybackAt(currentTime, selectedAudioTrackIndex)
+        if (request.origin === 'skip') {
+          await restartAfterRapidSkip(currentTime, selectedAudioTrackIndex)
+        } else {
+          cancelQueuedRapidSkip()
+          await restartPlaybackAt(currentTime, selectedAudioTrackIndex)
+        }
         return
       }
 
+      cancelQueuedRapidSkip()
       const duration = mediaInfo?.duration
       if (!infoHash || !duration || duration <= 0 || !Number.isFinite(duration)) return
       const target = Math.max(0, Math.min(currentTime, Math.max(0, duration - 0.25)))
@@ -486,13 +527,14 @@ export default function Player() {
       ])
       if (requestId !== seekRequestRef.current) return
     },
-    [infoHash, mediaInfo?.duration, restartPlaybackAt, selectedAudioTrackIndex]
+    [cancelQueuedRapidSkip, infoHash, mediaInfo?.duration, restartAfterRapidSkip, restartPlaybackAt, selectedAudioTrackIndex]
   )
 
   const handleAudioTrackChange = useCallback(
     async (audioTrackIndex: number) => {
       const track = mediaInfo?.audioTracks.find((candidate) => candidate.index === audioTrackIndex)
       if (!track) return
+      cancelQueuedRapidSkip()
       setSelectedAudioTrackIndex(audioTrackIndex)
       try {
         localStorage.setItem(PREFERRED_AUDIO_LANGUAGE_KEY, track.language)
@@ -501,7 +543,7 @@ export default function Player() {
       }
       await restartPlaybackAt(currentPlaybackTimeRef.current, audioTrackIndex)
     },
-    [mediaInfo, restartPlaybackAt]
+    [cancelQueuedRapidSkip, mediaInfo, restartPlaybackAt]
   )
 
   // History tracking
@@ -597,8 +639,9 @@ export default function Player() {
 
   const restartFromBeginning = useCallback(() => {
     setResumeNoticeTime(null)
+    cancelQueuedRapidSkip()
     void restartPlaybackAt(0, selectedAudioTrackIndex)
-  }, [restartPlaybackAt, selectedAudioTrackIndex])
+  }, [cancelQueuedRapidSkip, restartPlaybackAt, selectedAudioTrackIndex])
 
   const handleVideoError = useCallback((playbackError: unknown) => {
     const message = playbackErrorMessage(playbackError)

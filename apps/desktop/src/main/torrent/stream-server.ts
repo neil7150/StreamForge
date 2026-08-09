@@ -19,7 +19,12 @@ import { Readable } from 'node:stream'
 import { type ChildProcess } from 'node:child_process'
 import type { TorrentManager } from './manager'
 import { probeFile, createTranscodeStream, createSubtitleStream, disableHardwareVideoEncoding, warmupHardwareVideoEncoding, type ProbeResult } from './transcoder'
-import { classifyTranscodeRequest } from './transcode-session-policy'
+import {
+  classifyTranscodeRequest,
+  isSameTranscodeRequest,
+  parseTranscodeRequestIdentity,
+  type TranscodeRequestIdentity
+} from './transcode-session-policy'
 import {
   getRequestedAudioTrackIndex,
   requiresTimestampMediaPipeline
@@ -149,8 +154,11 @@ export class StreamServer {
     const sourceMatch = url.match(/^\/source\/([a-fA-F0-9]{40})/)
     if (sourceMatch) {
       const infoHash = sourceMatch[1].toLowerCase()
-      const consumer = new URL(url, this.getBaseURL()).searchParams.get('consumer')
-      this.handleSourceStream(req, res, infoHash, consumer === 'transcode')
+      const sourceURL = new URL(url, this.getBaseURL())
+      const playbackRequest = sourceURL.searchParams.get('consumer') === 'transcode'
+        ? parseTranscodeRequestIdentity(url, this.getBaseURL())
+        : null
+      this.handleSourceStream(req, res, infoHash, playbackRequest)
       return
     }
 
@@ -206,7 +214,7 @@ export class StreamServer {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     infoHash: string,
-    trackPlayback: boolean
+    playbackRequest: TranscodeRequestIdentity | null
   ): void {
     const file = this.torrentManager.getSelectedFile(infoHash)
     if (!file) {
@@ -262,7 +270,7 @@ export class StreamServer {
       return
     }
 
-    const source = Readable.from(this.iterateSourceSegments(infoHash, file, start, end, trackPlayback))
+    const source = Readable.from(this.iterateSourceSegments(infoHash, file, start, end, playbackRequest))
     source.on('error', (error: Error) => {
       console.error(`[StreamServer] Rolling source error for ${infoHash}:`, error.message)
       if (!res.headersSent) res.writeHead(500)
@@ -279,7 +287,7 @@ export class StreamServer {
     file: NonNullable<ReturnType<TorrentManager['getSelectedFile']>>,
     start: number,
     end: number,
-    trackPlayback: boolean
+    playbackRequest: TranscodeRequestIdentity | null
   ): AsyncGenerator<Buffer> {
     let cursor = start
 
@@ -295,7 +303,10 @@ export class StreamServer {
       }
 
       cursor = segmentEnd + 1
-      if (trackPlayback) {
+      if (
+        playbackRequest
+        && isSameTranscodeRequest(this.activeTranscodes.get(infoHash) ?? null, playbackRequest)
+      ) {
         const duration = this.probeCache.get(infoHash)?.duration ?? 0
         this.torrentManager.updateStreamBytePosition(infoHash, cursor, duration)
       }
@@ -672,17 +683,19 @@ export class StreamServer {
     const selectedAudioTrack = selectAudioTrack(probe.audioTracks, requestedAudioTrackIndex ?? undefined)
     const selectedAudioCodec = selectedAudioTrack?.codec ?? probe.audioCodec
     const selectedAudioNeedsTranscode = selectedAudioCodec ? !isAudioCodecSupported(selectedAudioCodec) : false
-    const rawSessionId = requestURL.searchParams.get('session') || 'legacy'
-    const sessionId = /^[a-zA-Z0-9_-]{1,80}$/.test(rawSessionId) ? rawSessionId : 'legacy'
-    const rawRequestId = Number.parseInt(requestURL.searchParams.get('request') || '0', 10)
-    const requestId = Number.isSafeInteger(rawRequestId) && rawRequestId >= 0 ? rawRequestId : 0
+    const { sessionId, requestId } = parseTranscodeRequestIdentity(req.url || '/', this.getBaseURL())
     const maxStart = probe.duration > 0 ? Math.max(0, probe.duration - 0.25) : Number.MAX_SAFE_INTEGER
     const seekSeconds = Number.isFinite(requestedStart)
       ? Math.max(0, Math.min(requestedStart, maxStart))
       : 0
 
     const diskPath = this.torrentManager.getSelectedFileDiskPath(infoHash)
-    const input = diskPath || `${this.getBaseURL()}/source/${infoHash}?consumer=transcode`
+    const sourceParams = new URLSearchParams({
+      consumer: 'transcode',
+      session: sessionId,
+      request: String(requestId)
+    })
+    const input = diskPath || `${this.getBaseURL()}/source/${infoHash}?${sourceParams.toString()}`
     const realtimeInput = !diskPath
 
     const existing = this.activeTranscodes.get(infoHash)

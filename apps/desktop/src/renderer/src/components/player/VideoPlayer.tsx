@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { getLocalPlaybackTime, getUnclampedLocalSeekTime } from '../../lib/playback-seek'
+import {
+  getLocalPlaybackTime,
+  getUnclampedLocalSeekTime,
+  isAbsolutePlaybackTimeBuffered,
+  isPlaybackTimeAtRequestedSeek
+} from '../../lib/playback-seek'
 import type { VideoElementDiagnostics } from '../../lib/playback-diagnostics'
 import { findActiveSubtitleCue, parseSubtitles, type SubtitleCue } from '../../lib/subtitle-policy'
 import {
@@ -48,6 +53,7 @@ export type PlaybackState = 'buffering' | 'playing' | 'stalled'
 
 export interface PlaybackSeekRequest {
   requiresRestart: boolean
+  origin: 'timeline' | 'skip'
 }
 
 interface VideoPlayerProps {
@@ -276,7 +282,7 @@ export default function VideoPlayer({
   }, [])
 
   const seek = useCallback(
-    (time: number) => {
+    (time: number, origin: PlaybackSeekRequest['origin'] = 'timeline') => {
       const video = videoRef.current
       if (!video || !seekable) return
 
@@ -285,13 +291,14 @@ export default function VideoPlayer({
       // as video.duration. Clamping to it turns a 50-minute request back into the
       // old stream endpoint, so retain the full timeline target here.
       const localTarget = getUnclampedLocalSeekTime(target, timelineOffset)
-      let targetIsBuffered = false
-      for (let index = 0; index < video.buffered.length; index++) {
-        if (localTarget >= video.buffered.start(index) - 0.25 && localTarget <= video.buffered.end(index) + 0.25) {
-          targetIsBuffered = true
-          break
-        }
-      }
+      const targetIsBuffered = isAbsolutePlaybackTimeBuffered(
+        target,
+        timelineOffset,
+        Array.from({ length: video.buffered.length }, (_, index) => ({
+          start: video.buffered.start(index),
+          end: video.buffered.end(index)
+        }))
+      )
       const requiresRestart = restartOnSeek && !targetIsBuffered
       const operation = ++seekOperationRef.current
       pendingSeekTimeRef.current = target
@@ -300,7 +307,7 @@ export default function VideoPlayer({
       setIsBuffering(true)
       onPlaybackStateChange?.('buffering')
 
-      void Promise.resolve(onSeeking?.(target, { requiresRestart }))
+      void Promise.resolve(onSeeking?.(target, { requiresRestart, origin }))
         .then(() => {
           if (operation !== seekOperationRef.current || requiresRestart) return
           // Prioritize the target torrent pieces before Chromium requests them.
@@ -319,9 +326,12 @@ export default function VideoPlayer({
 
   const skipBy = useCallback((seconds: number) => {
     if (!seekable) return
-    seek(currentTime + seconds)
+    const video = videoRef.current
+    const activeTime = pendingSeekTimeRef.current
+      ?? (video && Number.isFinite(video.currentTime) ? timelineOffset + video.currentTime : currentTime)
+    seek(activeTime + seconds, 'skip')
     resetHideTimer()
-  }, [currentTime, resetHideTimer, seek, seekable])
+  }, [currentTime, resetHideTimer, seek, seekable, timelineOffset])
 
   const changeVolume = useCallback((v: number) => {
     const video = videoRef.current
@@ -516,11 +526,19 @@ export default function VideoPlayer({
     }
     const handleTimeUpdateEvt = () => {
       const absoluteTime = timelineOffset + video.currentTime
+      const requestedTime = pendingSeekTimeRef.current
+      // The previous source can continue emitting events while the main process
+      // reprioritizes pieces and creates the replacement URL. Do not let those
+      // events snap the timeline or rolling torrent window back to the old time.
+      if (requestedTime !== null && !isPlaybackTimeAtRequestedSeek(absoluteTime, requestedTime)) {
+        const resolvedDuration = sourceDuration ?? (Number.isFinite(video.duration) ? video.duration : 0)
+        setDuration(resolvedDuration)
+        return
+      }
       if (!isSeeking) {
         setCurrentTime(absoluteTime)
       }
-      const requestedTime = pendingSeekTimeRef.current
-      if (requestedTime !== null && Math.abs(absoluteTime - requestedTime) < 1.5) {
+      if (requestedTime !== null) {
         pendingSeekTimeRef.current = null
         resumeAfterReloadRef.current = null
         setWaitingForPiecesAt(null)
@@ -596,6 +614,9 @@ export default function VideoPlayer({
       onPlaybackStateChange?.('buffering')
     }
     const handlePlaying = () => {
+      const requestedTime = pendingSeekTimeRef.current
+      const absoluteTime = timelineOffset + video.currentTime
+      if (requestedTime !== null && !isPlaybackTimeAtRequestedSeek(absoluteTime, requestedTime)) return
       retryRef.count = 0
       setLoadRetryCount(0)
       setLastPlaybackEvent('playing')
@@ -604,6 +625,9 @@ export default function VideoPlayer({
       onPlaybackStateChange?.('playing')
     }
     const handleCanPlayThrough = () => {
+      const requestedTime = pendingSeekTimeRef.current
+      const absoluteTime = timelineOffset + video.currentTime
+      if (requestedTime !== null && !isPlaybackTimeAtRequestedSeek(absoluteTime, requestedTime)) return
       setLastPlaybackEvent('canplaythrough')
       setIsBuffering(false)
     }

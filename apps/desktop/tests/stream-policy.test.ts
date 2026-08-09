@@ -11,20 +11,30 @@ import {
   MIN_AHEAD_SECONDS,
   RETAINED_BEHIND_SECONDS
 } from '../src/main/torrent/stream-policy.ts'
-import { classifyTranscodeRequest } from '../src/main/torrent/transcode-session-policy.ts'
+import {
+  classifyTranscodeRequest,
+  isSameTranscodeRequest,
+  parseTranscodeRequestIdentity
+} from '../src/main/torrent/transcode-session-policy.ts'
 import {
   getRequestedAudioTrackIndex,
   isTimelineSeekRequest,
   requiresTimestampMediaPipeline
 } from '../src/main/torrent/playback-request-policy.ts'
 import { isAudioCodecSupported, isTextSubtitleCodec, selectAudioTrack } from '../src/main/torrent/media-track-policy.ts'
-import { getLocalPlaybackTime, getUnclampedLocalSeekTime } from '../src/renderer/src/lib/playback-seek.ts'
+import {
+  getLocalPlaybackTime,
+  getUnclampedLocalSeekTime,
+  isAbsolutePlaybackTimeBuffered,
+  isPlaybackTimeAtRequestedSeek
+} from '../src/renderer/src/lib/playback-seek.ts'
 import { findActiveSubtitleCue, parseSubtitles } from '../src/renderer/src/lib/subtitle-policy.ts'
 import {
   cancelScheduledStreamCleanup,
   hasScheduledStreamCleanup,
   scheduleStreamCleanup
 } from '../src/renderer/src/lib/stream-cleanup-scheduler.ts'
+import { createLatestTaskScheduler } from '../src/renderer/src/lib/latest-task-scheduler.ts'
 
 const MIB = 1024 * 1024
 
@@ -94,6 +104,12 @@ test('transcode generations reject duplicate and stale browser requests', () => 
     classifyTranscodeRequest(existing, { sessionId: 'playback-b', requestId: 1 }),
     'replace'
   )
+  assert.deepEqual(
+    parseTranscodeRequestIdentity('/source/hash?consumer=transcode&session=playback-a&request=5', 'http://localhost'),
+    { sessionId: 'playback-a', requestId: 5 }
+  )
+  assert.equal(isSameTranscodeRequest(existing, { sessionId: 'playback-a', requestId: 4 }), true)
+  assert.equal(isSameTranscodeRequest(existing, { sessionId: 'playback-a', requestId: 5 }), false)
 })
 test('direct-stream retries resume at the requested absolute timestamp', () => {
   assert.equal(getLocalPlaybackTime(1800, 0, 3434.7), 1800)
@@ -106,6 +122,28 @@ test('long seeks are not clamped to Chromium transient fragment duration', () =>
   assert.equal(getLocalPlaybackTime(3000, 0, 1200), 1200)
   assert.equal(getUnclampedLocalSeekTime(3000, 0), 3000)
   assert.equal(getUnclampedLocalSeekTime(3000, 1200), 1800)
+})
+test('buffer checks use the full timeline instead of clamping before a fragment', () => {
+  const fragmentRanges = [{ start: 0, end: 30 }]
+  assert.equal(isAbsolutePlaybackTimeBuffered(2_990, 3_000, fragmentRanges), false)
+  assert.equal(isAbsolutePlaybackTimeBuffered(2_999.9, 3_000, fragmentRanges), false)
+  assert.equal(isAbsolutePlaybackTimeBuffered(3_010, 3_000, fragmentRanges), true)
+  assert.equal(isAbsolutePlaybackTimeBuffered(3_040, 3_000, fragmentRanges), false)
+})
+test('stale time updates cannot overwrite a pending seek target', () => {
+  assert.equal(isPlaybackTimeAtRequestedSeek(1_200, 3_000), false)
+  assert.equal(isPlaybackTimeAtRequestedSeek(2_999.25, 3_000), true)
+})
+test('rapid skip work is coalesced to the latest playback target', async () => {
+  const scheduler = createLatestTaskScheduler(10)
+  const startedTargets: number[] = []
+
+  const first = scheduler.schedule(() => { startedTargets.push(610) })
+  const second = scheduler.schedule(() => { startedTargets.push(620) })
+  const third = scheduler.schedule(() => { startedTargets.push(630) })
+
+  await Promise.all([first, second, third])
+  assert.deepEqual(startedTargets, [630])
 })
 test('timeline seeks use the timestamp-aware remux path', () => {
   const baseURL = 'http://127.0.0.1:4567'
