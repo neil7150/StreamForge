@@ -22,7 +22,7 @@
 import { ipcMain, shell, type BrowserWindow } from 'electron'
 import type { TorrentManager, TorrentInfo, TorrentProgress } from '../torrent/manager'
 import type { StreamServer } from '../torrent/stream-server'
-import { requireFileIndex, requireFiniteNumber, requireInfoHash, requireMagnetURI } from './validation'
+import { requireFileIndex, requireFiniteNumber, requireInfoHash, requireMagnetURI, requirePreferredEpisodeFile } from './validation'
 
 export function setupTorrentIPC(
   mainWindow: BrowserWindow,
@@ -32,9 +32,12 @@ export function setupTorrentIPC(
   // ─── Request/Response handlers ───────────────────────────────────
 
   /** Add a torrent in STREAM mode (ephemeral). */
-  ipcMain.handle('torrent:add', async (_event, magnetURI: string) => {
+  ipcMain.handle('torrent:add', async (_event, magnetURI: string, preferredEpisode?: unknown) => {
     try {
-      const info = await torrentManager.addTorrent(requireMagnetURI(magnetURI))
+      const info = await torrentManager.addTorrent(
+        requireMagnetURI(magnetURI),
+        preferredEpisode === undefined ? undefined : requirePreferredEpisodeFile(preferredEpisode)
+      )
       return info
     } catch (error) {
       console.error('[IPC torrent:add] Error:', (error as Error).message)
@@ -192,7 +195,7 @@ export function setupTorrentIPC(
   // ─── Forward TorrentManager events to the renderer ─────────────────
 
   torrentManager.on('torrent:ready', (info: TorrentInfo) => {
-    if (info.mode === 'stream') {
+    if (info.mode === 'stream' && !info.requiresFileSelection) {
       void streamServer.getMediaInfo(info.infoHash).catch((error) => {
         console.warn(`[IPC] Media prewarm failed for ${info.infoHash}:`, error)
       })

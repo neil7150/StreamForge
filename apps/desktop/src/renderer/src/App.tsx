@@ -6,6 +6,7 @@ import Home from './pages/Home'
 import Browse from './pages/Browse'
 import MovieDetail from './pages/MovieDetail'
 import Search from './pages/Search'
+import SeriesDetail from './pages/SeriesDetail'
 import Watchlist from './pages/Watchlist'
 import History from './pages/History'
 import Downloads from './pages/Downloads'
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/browse" element={<Browse />} />
               <Route path="/movie/:slug" element={<MovieDetail />} />
               <Route path="/search" element={<Search />} />
+              <Route path="/series/:seriesId" element={<SeriesDetail />} />
               <Route path="/watchlist" element={<Watchlist />} />
               <Route path="/history" element={<History />} />
               <Route path="/downloads" element={<Downloads />} />

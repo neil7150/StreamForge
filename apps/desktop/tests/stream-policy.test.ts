@@ -38,10 +38,10 @@ import { createLatestTaskScheduler } from '../src/renderer/src/lib/latest-task-s
 
 const MIB = 1024 * 1024
 
-test('forward cache remains between 20 and 30 seconds', () => {
+test('forward cache remains between 45 and 90 seconds', () => {
   const bytesPerSecond = 2 * MIB
   assert.equal(calculateAheadSeconds(6 * MIB, bytesPerSecond), MIN_AHEAD_SECONDS)
-  assert.equal(calculateAheadSeconds(3.2 * MIB, bytesPerSecond), 25)
+  assert.equal(calculateAheadSeconds(3.2 * MIB, bytesPerSecond), 60)
   assert.equal(calculateAheadSeconds(2 * MIB, bytesPerSecond), MAX_AHEAD_SECONDS)
   assert.equal(calculateAheadSeconds(20 * MIB, bytesPerSecond, true), MAX_AHEAD_SECONDS)
 })
@@ -64,15 +64,15 @@ test('window evicts watched data after the retention allowance', () => {
 
 test('startup buffer scales with bitrate and stays bounded', () => {
   assert.equal(calculateStartupBufferBytes(), FALLBACK_STARTUP_BUFFER_BYTES)
-  assert.equal(calculateStartupBufferBytes(128 * 1024), 4 * MIB)
-  assert.equal(calculateStartupBufferBytes(2 * MIB), 16 * MIB)
-  assert.equal(calculateStartupBufferBytes(20 * MIB), 32 * MIB)
+  assert.equal(calculateStartupBufferBytes(128 * 1024), 8 * MIB)
+  assert.equal(calculateStartupBufferBytes(2 * MIB), 30 * MIB)
+  assert.equal(calculateStartupBufferBytes(20 * MIB), 64 * MIB)
 })
 
-test('startup urgency stays near four MiB regardless of torrent piece size', () => {
-  assert.equal(calculateStartupCriticalEndPiece(10, 100, 256 * 1024), 25)
-  assert.equal(calculateStartupCriticalEndPiece(10, 100, 1024 * 1024), 13)
-  assert.equal(calculateStartupCriticalEndPiece(10, 100, 4 * MIB), 10)
+test('startup urgency stays near eight MiB regardless of torrent piece size', () => {
+  assert.equal(calculateStartupCriticalEndPiece(10, 100, 256 * 1024), 41)
+  assert.equal(calculateStartupCriticalEndPiece(10, 100, 1024 * 1024), 17)
+  assert.equal(calculateStartupCriticalEndPiece(10, 100, 4 * MIB), 11)
   assert.equal(calculateStartupCriticalEndPiece(10, 11, 256 * 1024), 11)
 })
 

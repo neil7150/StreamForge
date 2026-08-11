@@ -134,6 +134,18 @@ export function sourceQualityScore(result: TorrentSearchResult): number {
   return Math.round(seedScore + ratioScore + categoryBonus + resolutionBonus + directPlayBonus - compatibilityPenalty - deadPenalty)
 }
 
+/** Order sources by swarm availability, using quality only to break seed-count ties. */
+export function compareTorrentSourcesBySeeders(
+  left: TorrentSearchResult,
+  right: TorrentSearchResult
+): number {
+  return right.seeders - left.seeders
+    || (right.qualityScore ?? sourceQualityScore(right))
+      - (left.qualityScore ?? sourceQualityScore(left))
+    || left.leechers - right.leechers
+    || left.name.localeCompare(right.name)
+}
+
 export function deduplicateResults(results: TorrentSearchResult[]): TorrentSearchResult[] {
   const byHash = new Map<string, TorrentSearchResult>()
 
@@ -144,15 +156,11 @@ export function deduplicateResults(results: TorrentSearchResult[]): TorrentSearc
     const candidate = { ...result, qualityScore: sourceQualityScore(result) }
     const current = byHash.get(hash)
     const currentScore = current?.qualityScore ?? (current ? sourceQualityScore(current) : Number.NEGATIVE_INFINITY)
-    if (!current || candidate.qualityScore > currentScore
-      || (candidate.qualityScore === currentScore && candidate.seeders > current.seeders)) {
+    if (!current || candidate.seeders > current.seeders
+      || (candidate.seeders === current.seeders && candidate.qualityScore > currentScore)) {
       byHash.set(hash, candidate)
     }
   }
 
-  return [...byHash.values()].sort((left, right) =>
-    (right.qualityScore ?? 0) - (left.qualityScore ?? 0)
-      || right.seeders - left.seeders
-      || left.leechers - right.leechers
-  )
+  return [...byHash.values()].sort(compareTorrentSourcesBySeeders)
 }

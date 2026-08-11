@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  requireCatalogId,
+  requireEpisodeSearchRequest,
   requireFileIndex,
   requireFiniteNumber,
   requireInfoHash,
   requireMagnetURI,
+  requireMovieSearchRequest,
+  requireMovieCatalogId,
+  requirePreferredEpisodeFile,
   requireSearchQuery
 } from '../src/main/ipc/validation.ts'
 
@@ -27,7 +32,60 @@ test('rejects malformed privileged inputs', () => {
 })
 
 test('accepts bounded numeric and search inputs', () => {
+  assert.equal(requireCatalogId(42, 'series ID'), 42)
   assert.equal(requireFileIndex(4), 4)
   assert.equal(requireFiniteNumber(0.5, 'position', 0, 1), 0.5)
   assert.equal(requireSearchQuery('  public domain movie  '), 'public domain movie')
+})
+
+test('rejects malformed catalog identifiers', () => {
+  assert.throws(() => requireCatalogId('42'))
+  assert.throws(() => requireCatalogId(0))
+  assert.throws(() => requireCatalogId(1.5))
+})
+
+test('accepts only provider-qualified movie catalog identifiers', () => {
+  assert.equal(requireMovieCatalogId('CINEMETA:TT0137523'), 'cinemeta:tt0137523')
+  assert.equal(requireMovieCatalogId('YTS:42'), 'yts:42')
+  assert.throws(() => requireMovieCatalogId(42))
+  assert.throws(() => requireMovieCatalogId('42'))
+  assert.throws(() => requireMovieCatalogId('cinemeta:bad'))
+})
+
+test('normalizes and bounds structured episode searches', () => {
+  assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: '  Example Show  ',
+    seasonNumber: 1,
+    episodeNumber: 2,
+    episodeTitle: '  The Arrival  '
+  }), {
+    seriesTitle: 'Example Show',
+    seasonNumber: 1,
+    episodeNumber: 2,
+    episodeTitle: 'The Arrival'
+  })
+  assert.throws(() => requireEpisodeSearchRequest(null))
+  assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'X', seasonNumber: 1, episodeNumber: 2 }))
+  assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: -1, episodeNumber: 2 }))
+  assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 0 }))
+})
+
+test('validates preferred episode file selections', () => {
+  assert.deepEqual(requirePreferredEpisodeFile({ seasonNumber: 1, episodeNumber: 2 }), {
+    seasonNumber: 1,
+    episodeNumber: 2
+  })
+  assert.throws(() => requirePreferredEpisodeFile(null))
+  assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: -1, episodeNumber: 2 }))
+  assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: 1, episodeNumber: 0 }))
+})
+
+test('normalizes and bounds structured movie searches', () => {
+  assert.deepEqual(requireMovieSearchRequest({ title: '  Example Movie  ', year: 2024 }), {
+    title: 'Example Movie',
+    year: 2024
+  })
+  assert.deepEqual(requireMovieSearchRequest({ title: 'Example Movie' }), { title: 'Example Movie', year: undefined })
+  assert.throws(() => requireMovieSearchRequest({ title: 'X', year: 2024 }))
+  assert.throws(() => requireMovieSearchRequest({ title: 'Movie', year: 1800 }))
 })

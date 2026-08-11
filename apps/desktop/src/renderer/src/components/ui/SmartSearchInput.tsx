@@ -6,6 +6,7 @@ import { isValidMagnet } from '../../lib/utils'
 interface SmartSearchInputProps {
   onMagnet: (magnetURI: string) => void
   onSearch: (query: string) => void
+  onClear?: () => void
   initialValue?: string
   isLoading?: boolean
   error?: string | null
@@ -16,6 +17,7 @@ interface SmartSearchInputProps {
 export default function SmartSearchInput({
   onMagnet,
   onSearch,
+  onClear,
   initialValue = '',
   isLoading = false,
   error = null,
@@ -65,7 +67,7 @@ export default function SmartSearchInput({
           onChange={(event) => { setValue(event.target.value); setLocalError(null) }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !isLoading) submit()
-            if (event.key === 'Escape') { setValue(''); setLocalError(null); inputRef.current?.blur() }
+            if (event.key === 'Escape') { setValue(''); setLocalError(null); onClear?.(); inputRef.current?.blur() }
           }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
@@ -77,7 +79,7 @@ export default function SmartSearchInput({
         />
         <div className="mr-2 flex shrink-0 items-center gap-1">
           {value ? (
-            <button onClick={() => { setValue(''); setLocalError(null); inputRef.current?.focus() }} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.06] hover:text-white/65" title="Clear">
+            <button onClick={() => { setValue(''); setLocalError(null); onClear?.(); inputRef.current?.focus() }} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.06] hover:text-white/65" title="Clear">
               <X className="h-3.5 w-3.5" />
             </button>
           ) : (

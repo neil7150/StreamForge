@@ -1,14 +1,14 @@
 const MIB = 1024 * 1024
 
-export const RETAINED_BEHIND_SECONDS = 25
-export const MIN_AHEAD_SECONDS = 20
-export const MAX_AHEAD_SECONDS = 30
-export const FALLBACK_STARTUP_BUFFER_BYTES = 10 * MIB
+export const RETAINED_BEHIND_SECONDS = 15
+export const MIN_AHEAD_SECONDS = 45
+export const MAX_AHEAD_SECONDS = 90
+export const FALLBACK_STARTUP_BUFFER_BYTES = 16 * MIB
 
-const MIN_STARTUP_BUFFER_BYTES = 4 * MIB
-const MAX_STARTUP_BUFFER_BYTES = 32 * MIB
-const STARTUP_SECONDS = 8
-export const STARTUP_CRITICAL_BYTES = 4 * MIB
+const MIN_STARTUP_BUFFER_BYTES = 8 * MIB
+const MAX_STARTUP_BUFFER_BYTES = 64 * MIB
+const STARTUP_SECONDS = 15
+export const STARTUP_CRITICAL_BYTES = 8 * MIB
 export const METADATA_TAIL_BYTES = 2 * MIB
 
 export interface PieceRange {
@@ -47,11 +47,11 @@ export function calculateAheadSeconds(
 
   const headroom = downloadSpeed / bytesPerSecond
   if (headroom >= 2.5) return MIN_AHEAD_SECONDS
-  if (headroom >= 1.5) return 25
+  if (headroom >= 1.5) return 60
   return MAX_AHEAD_SECONDS
 }
 
-/** Eight seconds is enough to start playback while remaining bounded for 4K files. */
+/** Prefer a longer startup reserve so normal peer-speed variation does not interrupt playback. */
 export function calculateStartupBufferBytes(bytesPerSecond?: number): number {
   if (!bytesPerSecond || !Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
     return FALLBACK_STARTUP_BUFFER_BYTES

@@ -1,230 +1,161 @@
-import { useMemo, useCallback, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Play, Star, Clock, Calendar, Shield, Tag, Bookmark, Download } from 'lucide-react'
-import clsx from 'clsx'
-import { getMovieBySlug } from '../lib/mockData'
-import { useUserDataStore } from '../stores/userDataStore'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, CalendarDays, Clock3, Film, Loader2, Play, Star, Users, WifiOff } from 'lucide-react'
+import type { MovieDetails, MovieSummary, TorrentSearchResponse, TorrentSearchResult } from '../../../preload/index.d'
+import { parseMovieCatalogId } from '../lib/movie-detail-policy'
+import { extractInfoHash } from '../lib/utils'
 import { useTorrentStore } from '../stores/torrentStore'
+
+interface MovieLocationState {
+  movie?: MovieSummary
+  fromQuery?: string
+}
+
+function compatibility(name: string): string {
+  const value = name.toLowerCase()
+  if (/h\.?264|x264|avc/.test(value) && /aac|mp3|opus/.test(value)) return 'Direct play'
+  if (/hevc|h\.?265|x265|ac3|eac3|dts/.test(value)) return 'Compatibility mode'
+  return 'Auto detect'
+}
+
+function quality(name: string): string {
+  const value = name.toLowerCase()
+  if (/2160p|4k/.test(value)) return '4K'
+  if (/1080p/.test(value)) return '1080p'
+  if (/720p/.test(value)) return '720p'
+  if (/480p/.test(value)) return '480p'
+  return 'Unknown quality'
+}
+
+function providerNotice(response: TorrentSearchResponse): string | null {
+  if (response.cache === 'stale') return 'Live providers are unavailable. Showing recent cached sources.'
+  const unavailable = response.providers.filter((provider) => provider.status !== 'ok')
+  if (unavailable.length === 0) return null
+  return unavailable.map((provider) => provider.status === 'cooldown'
+    ? `${provider.name} temporarily paused`
+    : `${provider.name} unavailable`).join(', ') + '. Other providers are shown.'
+}
+
+function MoviePoster({ movie }: { movie: MovieDetails }) {
+  const [failed, setFailed] = useState(false)
+  return (
+    <div className="flex aspect-[2/3] h-60 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/[0.09] bg-[#181b1d] shadow-2xl shadow-black/40">
+      {movie.posterUrl && !failed ? <img src={movie.posterUrl} alt={`${movie.title} poster`} draggable={false} referrerPolicy="no-referrer" onError={() => setFailed(true)} className="h-full w-full object-cover" /> : <Film className="h-9 w-9 text-white/14" />}
+    </div>
+  )
+}
 
 export default function MovieDetail() {
   const { slug } = useParams<{ slug: string }>()
+  const movieId = useMemo(() => parseMovieCatalogId(slug), [slug])
   const navigate = useNavigate()
+  const location = useLocation()
+  const state = location.state as MovieLocationState | null
+  const [movie, setMovie] = useState<MovieDetails | null>(null)
+  const [sources, setSources] = useState<TorrentSearchResult[]>([])
+  const [pageLoading, setPageLoading] = useState(true)
+  const [sourcesLoading, setSourcesLoading] = useState(false)
+  const [pageError, setPageError] = useState<string | null>(null)
+  const [sourcesError, setSourcesError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const pageRequestRef = useRef(0)
+  const sourceRequestRef = useRef(0)
+  const addTorrent = useTorrentStore((store) => store.addTorrent)
+  const clearTorrentError = useTorrentStore((store) => store.clearError)
 
-  const movie = useMemo(() => (slug ? getMovieBySlug(slug) : undefined), [slug])
-  const addToWatchlist = useUserDataStore((s) => s.addToWatchlist)
-  const removeFromWatchlist = useUserDataStore((s) => s.removeFromWatchlist)
-  const isInWatchlist = useUserDataStore((s) => movie ? s.watchlist.some((e) => e.movieId === movie.id) : false)
+  const goBack = useCallback(() => {
+    navigate('/search', { state: state?.fromQuery ? { query: state.fromQuery } : undefined })
+  }, [navigate, state?.fromQuery])
 
-  const handlePlay = useCallback(() => {
-    if (movie?.magnetURI) {
-      navigate('/', { state: { magnetURI: movie.magnetURI } })
-    }
-  }, [movie, navigate])
-
-  const toggleWatchlist = useCallback(() => {
-    if (!movie) return
-    if (isInWatchlist) {
-      removeFromWatchlist(movie.id)
-    } else {
-      addToWatchlist({
-        movieId: movie.id,
-        slug: movie.slug,
-        title: movie.title,
-        poster: movie.poster,
-        year: movie.year,
-        rating: movie.rating,
-        magnetURI: movie.magnetURI
-      })
-    }
-  }, [movie, isInWatchlist, addToWatchlist, removeFromWatchlist])
-
-  const addDownload = useTorrentStore((s) => s.addDownload)
-  const [downloading, setDownloading] = useState(false)
-
-  const handleDownload = useCallback(async () => {
-    if (!movie?.magnetURI) return
-    setDownloading(true)
+  const loadSources = useCallback(async (details: MovieDetails) => {
+    const requestId = ++sourceRequestRef.current
+    setSourcesLoading(true)
+    setSources([])
+    setSourcesError(null)
+    setNotice(null)
     try {
-      await addDownload(movie.magnetURI)
-      navigate('/downloads')
-    } catch {
-      // Error shown via store
+      const response = await window.torrentAPI.searchMovieTorrents({ title: details.title, year: details.year ?? undefined })
+      if (requestId !== sourceRequestRef.current) return
+      setSources(response.results)
+      setNotice(providerNotice(response))
+      if (response.results.length === 0) {
+        const allUnavailable = response.providers.length > 0 && response.providers.every((provider) => provider.status !== 'ok')
+        setSourcesError(allUnavailable ? 'All torrent providers are currently unavailable.' : 'No exact torrent sources were found for this movie.')
+      }
+    } catch (error) {
+      if (requestId !== sourceRequestRef.current) return
+      console.error('[MovieDetail] Source search failed:', error)
+      setSourcesError('Movie sources could not be searched. Check your connection and try again.')
     } finally {
-      setDownloading(false)
+      if (requestId === sourceRequestRef.current) setSourcesLoading(false)
     }
-  }, [movie, addDownload, navigate])
+  }, [])
 
-  if (!movie) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-4">
-        <p className="text-sm text-[var(--color-text-secondary)]">Movie not found</p>
-        <button
-          onClick={() => navigate('/browse')}
-          className="flex items-center gap-2 rounded-lg bg-[var(--color-bg-tertiary)] px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-card-hover)]"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to Browse
-        </button>
-      </div>
-    )
-  }
+  const loadMovie = useCallback(async () => {
+    const requestId = ++pageRequestRef.current
+    if (movieId === null) { setPageError('This movie address is invalid.'); setPageLoading(false); return }
+    setPageLoading(true)
+    setPageError(null)
+    try {
+      const details = await window.torrentAPI.getMovie(movieId)
+      if (requestId !== pageRequestRef.current) return
+      setMovie(details)
+      setPageLoading(false)
+      void loadSources(details)
+    } catch (error) {
+      if (requestId !== pageRequestRef.current) return
+      console.error('[MovieDetail] Movie load failed:', error)
+      setPageError('The movie could not be loaded. Check your connection and try again.')
+      setPageLoading(false)
+    }
+  }, [loadSources, movieId])
+
+  useEffect(() => {
+    void loadMovie()
+    return () => { pageRequestRef.current += 1; sourceRequestRef.current += 1 }
+  }, [loadMovie])
+
+  const streamSource = useCallback((source: TorrentSearchResult) => {
+    const hash = extractInfoHash(source.magnetURI)
+    if (!hash || !movie) return
+    clearTorrentError()
+    void addTorrent(source.magnetURI, undefined, {
+      title: movie.title,
+      posterUrl: movie.posterUrl ?? movie.backdropUrl
+    }).catch(() => {})
+    navigate('/player/' + hash)
+  }, [addTorrent, clearTorrentError, movie, navigate])
+
+  if (pageLoading) return <div className="flex h-full flex-col items-center justify-center" role="status"><Loader2 className="h-6 w-6 animate-spin text-teal-300" /><p className="mt-3 text-[11px] text-white/35">Loading {state?.movie?.title || 'movie'}...</p></div>
+  if (pageError || !movie) return <div className="flex h-full flex-col items-center justify-center px-8 text-center" role="alert"><WifiOff className="h-7 w-7 text-white/16" /><p className="mt-4 text-[12px] text-white/55">{pageError || 'The movie could not be loaded.'}</p><div className="mt-5 flex gap-2"><button onClick={goBack} className="rounded-lg border border-white/[0.09] px-3 py-2 text-[10px] text-white/55">Back to search</button>{movieId !== null && <button onClick={() => void loadMovie()} className="rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-[#17191b]">Try again</button>}</div></div>
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      {/* ── Hero Backdrop ────────────────────────────── */}
-      <div
-        className="relative h-80 shrink-0 overflow-hidden"
-        style={{
-          backgroundImage: `url(${movie.backdrop || movie.poster})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center 15%'
-        }}
-      >
-        <div className="absolute inset-0 bg-gradient-to-t from-[var(--color-bg-primary)] via-[var(--color-bg-primary)]/50 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[var(--color-bg-primary)]/90 to-transparent" />
-        {/* Back button */}
-        <button
-          onClick={() => navigate('/browse')}
-          className="absolute top-4 left-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* ── Content ──────────────────────────────────── */}
-      <div className="relative -mt-20 px-6 pb-8">
-        <div className="flex gap-6">
-          {/* Poster */}
-          <div className="shrink-0">
-            <div className="h-56 w-40 overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/10">
-              <img
-                src={movie.poster}
-                alt={movie.title}
-                className="h-full w-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = ''
-                  ;(e.target as HTMLImageElement).style.backgroundColor = 'var(--color-bg-tertiary)'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Info */}
-          <div className="flex-1 pt-16">
-            <h1 className="text-2xl font-bold text-[var(--color-text-primary)] mb-2">
-              {movie.title}
-            </h1>
-
-            {/* Meta row */}
-            <div className="flex flex-wrap items-center gap-3 mb-4">
-              <span className="flex items-center gap-1 text-sm text-yellow-400">
-                <Star className="h-4 w-4 fill-current" />
-                {movie.rating} / 5
-              </span>
-              <span className="flex items-center gap-1 text-sm text-[var(--color-text-muted)]">
-                <Calendar className="h-3.5 w-3.5" />
-                {movie.year}
-              </span>
-              <span className="flex items-center gap-1 text-sm text-[var(--color-text-muted)]">
-                <Clock className="h-3.5 w-3.5" />
-                {movie.runtime}
-              </span>
-              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-400">
-                <Shield className="h-3 w-3" />
-                {movie.license}
-              </span>
-            </div>
-
-            {/* Genres */}
-            <div className="flex gap-2 mb-5">
-              {movie.genre.map((g) => (
-                <span
-                  key={g}
-                  className="flex items-center gap-1 rounded-lg bg-[var(--color-bg-tertiary)] px-3 py-1 text-xs text-[var(--color-text-secondary)]"
-                >
-                  <Tag className="h-3 w-3" />
-                  {g}
-                </span>
-              ))}
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex gap-3">
-              {movie.magnetURI ? (
-                <>
-                  <button
-                    onClick={handlePlay}
-                    className="flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-6 py-2.5 text-sm font-semibold text-white shadow-[var(--shadow-glow)] transition-all duration-200 hover:bg-[var(--color-accent-hover)] hover:scale-[1.03] active:scale-[0.98]"
-                  >
-                    <Play className="h-4 w-4 fill-current" />
-                    Stream Now
-                  </button>
-                  <button
-                    onClick={handleDownload}
-                    disabled={downloading}
-                    className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-5 py-2.5 text-sm font-medium text-emerald-400 transition-all duration-200 hover:bg-emerald-500 hover:text-white disabled:opacity-50"
-                  >
-                    <Download className="h-4 w-4" />
-                    {downloading ? 'Adding...' : 'Download'}
-                  </button>
-                </>
-              ) : (
-                <div className="flex items-center gap-2 rounded-xl bg-[var(--color-bg-tertiary)] px-6 py-2.5 text-sm text-[var(--color-text-muted)]">
-                  <Play className="h-4 w-4" />
-                  No stream available
-                </div>
-              )}
-              <button
-                onClick={toggleWatchlist}
-                className={clsx(
-                  'flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-medium transition-all duration-200',
-                  isInWatchlist
-                    ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20'
-                    : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-card-hover)]'
-                )}
-              >
-                <Bookmark className={clsx('h-4 w-4', isInWatchlist && 'fill-current')} />
-                {isInWatchlist ? 'In Watchlist' : 'Add to Watchlist'}
-              </button>
+    <div className="h-full overflow-y-auto">
+      <header className="relative overflow-hidden border-b border-white/[0.06]">
+        {movie.backdropUrl && <img src={movie.backdropUrl} alt="" draggable={false} referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover opacity-[0.16]" />}
+        <div className="absolute inset-0 bg-gradient-to-r from-[#101214] via-[#101214]/90 to-[#101214]/70" />
+        <div className="relative mx-auto max-w-[1160px] px-10 pb-9 pt-7">
+          <button onClick={goBack} className="mb-7 flex items-center gap-2 text-[10px] text-white/38 hover:text-white/75"><ArrowLeft className="h-3.5 w-3.5" /> Back to search</button>
+          <div className="flex items-end gap-7">
+            <MoviePoster movie={movie} />
+            <div className="min-w-0 flex-1 pb-2">
+              <div className="mb-3 flex gap-2"><span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[9px] text-white/48">Movie</span>{movie.contentRating && <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[9px] text-white/48">{movie.contentRating}</span>}</div>
+              <h1 className="text-[30px] font-semibold tracking-[-0.04em] text-white/92">{movie.title}</h1>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[10px] text-white/40">{movie.year && <span className="flex items-center gap-1.5"><CalendarDays className="h-3.5 w-3.5" />{movie.year}</span>}{movie.runtimeMinutes && <span className="flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" />{movie.runtimeMinutes} min</span>}{movie.rating !== null && <span className="flex items-center gap-1.5 text-amber-200/65"><Star className="h-3.5 w-3.5 fill-current" />{movie.rating.toFixed(1)}</span>}</div>
+              {movie.genres.length > 0 && <p className="mt-4 text-[10px] text-teal-200/55">{movie.genres.join(' / ')}</p>}
+              {movie.summary && <p className="mt-4 max-w-3xl text-[11px] leading-5 text-white/43">{movie.summary}</p>}
             </div>
           </div>
         </div>
+      </header>
 
-        {/* ── Overview ─────────────────────────────── */}
-        <section className="mt-8">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-            Overview
-          </h2>
-          <p className="text-sm leading-relaxed text-[var(--color-text-secondary)] max-w-2xl">
-            {movie.overview}
-          </p>
-        </section>
-
-        {/* ── Stream Info ──────────────────────────── */}
-        {movie.magnetURI && (
-          <section className="mt-6">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Stream Source
-            </h2>
-            <div className="glass rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-[var(--color-text-primary)]">Torrent Stream</p>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                    Peer-to-peer · Sequential download · No waiting
-                  </p>
-                </div>
-                <button
-                  onClick={handlePlay}
-                  className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-accent)]/20"
-                >
-                  <Play className="h-3 w-3 fill-current" />
-                  Play
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-      </div>
+      <main className="mx-auto max-w-[1160px] px-10 pb-14 pt-8">
+        <div className="mb-4 flex items-end justify-between border-b border-white/[0.06] pb-3"><div><h2 className="text-[15px] font-semibold text-white/78">Available torrents</h2><p className="mt-1 text-[9px] text-white/27">Exact title and release-year matches from all configured providers.</p></div>{!sourcesLoading && sources.length > 0 && <span className="text-[9px] text-white/25">{sources.length} sources</span>}</div>
+        {sourcesLoading && <div className="flex min-h-44 items-center justify-center" role="status"><Loader2 className="h-5 w-5 animate-spin text-teal-300" /><span className="ml-3 text-[10px] text-white/30">Checking movie sources...</span></div>}
+        {!sourcesLoading && notice && <p className="mb-3 text-[9px] text-amber-200/55">{notice}</p>}
+        {!sourcesLoading && sourcesError && <div className="rounded-xl border border-white/[0.07] px-5 py-8 text-center" role="alert"><p className="text-[11px] text-white/45">{sourcesError}</p><button onClick={() => void loadSources(movie)} className="mt-4 rounded-lg border border-white/[0.09] px-3 py-2 text-[10px] text-white/55">Try again</button></div>}
+        {!sourcesLoading && sources.length > 0 && <div className="divide-y divide-white/[0.055] border-y border-white/[0.06]">{sources.map((source) => <article key={source.id} className="flex min-w-0 items-center gap-5 py-4"><div className="min-w-0 flex-1"><h3 className="truncate text-[11px] font-medium text-white/68" title={source.name}>{source.name}</h3><div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-white/28"><span className="flex items-center gap-1 text-teal-200/58"><Users className="h-3 w-3" />{source.seeders} seeds</span><span>{source.size}</span><span>{quality(source.name)}</span><span>{compatibility(source.name)}</span><span>{source.provider}</span></div></div><button onClick={() => streamSource(source)} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 text-[9px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Stream</button></article>)}</div>}
+      </main>
     </div>
   )
 }

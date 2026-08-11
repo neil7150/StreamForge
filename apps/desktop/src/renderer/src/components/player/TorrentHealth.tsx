@@ -6,7 +6,6 @@ interface TorrentHealthProps {
   numPeers: number
   downloadSpeed: number
   uploadSpeed: number
-  progress: number // 0–1
   ratio: number
 }
 
@@ -38,12 +37,10 @@ export default function TorrentHealth({
   numPeers,
   downloadSpeed,
   uploadSpeed,
-  progress,
   ratio
 }: TorrentHealthProps) {
   const health = getHealthLevel(numPeers)
   const config = healthConfig[health]
-  const pct = Math.min(progress * 100, 100)
 
   return (
     <div className="glass flex flex-wrap items-center gap-4 rounded-xl px-4 py-3">
@@ -89,7 +86,7 @@ export default function TorrentHealth({
       {/* Peers */}
       <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
         <Users className="h-3.5 w-3.5" />
-        <span>{numPeers} peer{numPeers !== 1 ? 's' : ''}</span>
+        <span title="Live connections. Search result seeder counts are provider snapshots and may include stale or unreachable peers.">{numPeers} connected</span>
       </div>
 
       {/* Ratio */}
@@ -98,33 +95,6 @@ export default function TorrentHealth({
         <span>Ratio: {ratio.toFixed(2)}</span>
       </div>
 
-      {/* Mini progress circle */}
-      <div className="ml-auto flex items-center gap-2">
-        <svg className="h-7 w-7 -rotate-90" viewBox="0 0 36 36">
-          <circle
-            cx="18"
-            cy="18"
-            r="14"
-            fill="none"
-            stroke="var(--color-bg-tertiary)"
-            strokeWidth="3"
-          />
-          <circle
-            cx="18"
-            cy="18"
-            r="14"
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeDasharray={`${pct * 0.88} 88`}
-            className="transition-all duration-700"
-          />
-        </svg>
-        <span className="text-xs font-medium text-[var(--color-text-primary)]">
-          {pct.toFixed(1)}%
-        </span>
-      </div>
     </div>
   )
 }

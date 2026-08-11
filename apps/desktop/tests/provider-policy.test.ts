@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   appendFallbackTrackers,
   buildMagnetURI,
+  compareTorrentSourcesBySeeders,
   decodeXmlText,
   deduplicateResults,
   extractInfoHashFromMagnet,
@@ -68,6 +69,15 @@ test('ranks browser-compatible sources above similarly healthy transcode sources
 
   assert.ok(sourceQualityScore(directPlay) > sourceQualityScore(transcode))
   assert.equal(deduplicateResults([transcode, directPlay])[0].name, directPlay.name)
+})
+
+test('ranks seed count before compatibility and other quality signals', () => {
+  const compatible = { ...result(HASH_A, 20, 'APIBay'), name: 'Movie 1080p H264 AAC' }
+  const moreSeeded = { ...result(HASH_B, 80, 'Nyaa'), name: 'Movie 1080p HEVC AC3' }
+
+  assert.ok(sourceQualityScore(compatible) > sourceQualityScore({ ...moreSeeded, seeders: 20 }))
+  assert.ok(compareTorrentSourcesBySeeders(moreSeeded, compatible) < 0)
+  assert.equal(deduplicateResults([compatible, moreSeeded])[0].name, moreSeeded.name)
 })
 
 test('parses provider sizes and XML entities safely', () => {

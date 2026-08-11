@@ -22,6 +22,7 @@ import { setupTorrentIPC } from './ipc/torrent'
 import { setupWindowIPC } from './ipc/window'
 import { setupCacheIPC } from './ipc/cache'
 import { registerSearchHandlers } from './ipc/search'
+import { registerCatalogHandlers } from './ipc/catalog'
 
 // ─── Register custom protocol scheme as privileged ─────────────────
 // Must happen before app.whenReady(). Enables Range requests, streaming,
@@ -210,6 +211,7 @@ app.whenReady().then(async () => {
   setupTorrentIPC(window, torrentManager, streamServer)
   setupCacheIPC(cacheManager, torrentManager)
   registerSearchHandlers()
+  registerCatalogHandlers()
 
   // 8. Restore persistent downloads from the previous session
   await torrentManager.restoreDownloads()

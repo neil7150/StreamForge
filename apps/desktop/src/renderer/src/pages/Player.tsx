@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Activity, ArrowLeft, Film, ChevronDown, RotateCcw } from 'lucide-react'
 import clsx from 'clsx'
 import VideoPlayer, { type PlaybackSeekRequest, type SubtitleTrack } from '../components/player/VideoPlayer'
-import BufferIndicator from '../components/player/BufferIndicator'
 import TorrentHealth from '../components/player/TorrentHealth'
 import PlaybackDiagnosticsPanel from '../components/player/PlaybackDiagnosticsPanel'
 import { useTorrentStore } from '../stores/torrentStore'
@@ -127,6 +126,9 @@ export default function Player() {
   const streamMagnet = useTorrentStore((s) => (
     infoHash ? s.streamMagnets.get(infoHash.toLowerCase()) ?? "" : ""
   ))
+  const streamDisplayMetadata = useTorrentStore((s) => (
+    infoHash ? s.streamDisplayMetadata.get(infoHash.toLowerCase()) : undefined
+  ))
   const retryStream = useTorrentStore((s) => s.retryStream)
   const cleanupStream = useTorrentStore((s) => s.cleanupStream)
   const savedHistoryEntry = useUserDataStore((s) => (
@@ -138,6 +140,7 @@ export default function Player() {
   const [error, setError] = useState<string | null>(null)
   const [selectedFileIndex, setSelectedFileIndex] = useState<number | null>(null)
   const [showFileSelector, setShowFileSelector] = useState(false)
+  const [manualFileSelectionComplete, setManualFileSelectionComplete] = useState(false)
   const [mediaInfo, setMediaInfo] = useState<PlayerMediaInfo | null>(null)
   const [selectedAudioTrackIndex, setSelectedAudioTrackIndex] = useState<number | null>(null)
   const [playbackOffset, setPlaybackOffset] = useState(0)
@@ -166,6 +169,13 @@ export default function Player() {
     resumeHashRef.current = infoHash
     initialHistoryEntryRef.current = savedHistoryEntry
   }
+  const playbackTitle = streamDisplayMetadata?.title.trim()
+    || initialHistoryEntryRef.current?.title.trim()
+    || torrent?.name
+    || 'Unknown'
+  const playbackPoster = streamDisplayMetadata?.posterUrl?.trim()
+    || initialHistoryEntryRef.current?.poster.trim()
+    || ''
 
   const cancelQueuedRapidSkip = useCallback(() => {
     rapidSkipSchedulerRef.current?.cancel()
@@ -190,6 +200,8 @@ export default function Player() {
     setStreamURL(null)
     setMediaInfo(null)
     setSelectedAudioTrackIndex(null)
+    setSelectedFileIndex(null)
+    setManualFileSelectionComplete(false)
     setPlaybackOffset(0)
     setPhase('connecting')
     connectionStartedAtRef.current = Date.now()
@@ -345,6 +357,14 @@ export default function Player() {
           return
         }
 
+        setSelectedFileIndex(found.requiresFileSelection ? null : found.selectedFileIndex)
+        if (found.requiresFileSelection) {
+          setShowFileSelector(true)
+          setLoading(false)
+          setPhase('metadata')
+          return
+        }
+
         setPhase('probing')
         console.log('[Player] Torrent ready, fetching stream URL and media info for', infoHash)
         const [url, info] = await Promise.all([
@@ -428,6 +448,7 @@ export default function Player() {
         const url = await window.torrentAPI.selectFile(infoHash, fileIndex)
         const info = await window.torrentAPI.getMediaInfo(infoHash)
         setSelectedFileIndex(fileIndex)
+        setManualFileSelectionComplete(true)
         setResumeNoticeTime(null)
         setMediaInfo(info)
         const selectedAudio = info ? choosePreferredAudioTrack(info) : null
@@ -557,14 +578,14 @@ export default function Player() {
     addToHistory({
       movieId: torrent.infoHash,
       slug: torrent.infoHash,
-      title: torrent.name || 'Unknown',
-      poster: '',
+      title: playbackTitle,
+      poster: playbackPoster,
       progress: initialHistoryEntryRef.current?.progress ?? 0,
       currentTime: initialHistoryEntryRef.current?.currentTime,
       duration: initialHistoryEntryRef.current?.duration,
       magnetURI: streamMagnet
     })
-  }, [torrent?.infoHash, streamURL, streamMagnet, addToHistory])
+  }, [torrent?.infoHash, streamURL, streamMagnet, playbackTitle, playbackPoster, addToHistory])
 
   // Persist an exact recovery point frequently enough to survive abrupt exits.
   const handleTimeUpdate = useCallback(
@@ -583,15 +604,15 @@ export default function Player() {
       addToHistory({
         movieId: torrent.infoHash,
         slug: torrent.infoHash,
-        title: torrent.name || 'Unknown',
-        poster: '',
+        title: playbackTitle,
+        poster: playbackPoster,
         progress: currentTime / duration,
         currentTime,
         duration,
         magnetURI: streamMagnet
       })
     },
-    [infoHash, torrent, streamMagnet, addToHistory]
+    [infoHash, torrent, streamMagnet, playbackTitle, playbackPoster, addToHistory]
   )
 
   const handlePlaybackEnded = useCallback(() => {
@@ -600,14 +621,14 @@ export default function Player() {
     addToHistory({
       movieId: torrent.infoHash,
       slug: torrent.infoHash,
-      title: torrent.name || 'Unknown',
-      poster: '',
+      title: playbackTitle,
+      poster: playbackPoster,
       progress: 1,
       currentTime: mediaInfo.duration,
       duration: mediaInfo.duration,
       magnetURI: streamMagnet
     })
-  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent])
+  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster])
 
   useEffect(() => {
     const persistRecoveryPoint = () => {
@@ -617,8 +638,8 @@ export default function Player() {
       addToHistory({
         movieId: torrent.infoHash,
         slug: torrent.infoHash,
-        title: torrent.name || 'Unknown',
-        poster: '',
+        title: playbackTitle,
+        poster: playbackPoster,
         progress: currentTime / duration,
         currentTime,
         duration,
@@ -635,7 +656,7 @@ export default function Player() {
       window.removeEventListener('beforeunload', persistRecoveryPoint)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent])
+  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster])
 
   const restartFromBeginning = useCallback(() => {
     setResumeNoticeTime(null)
@@ -696,7 +717,7 @@ export default function Player() {
           {PHASE_LABELS[phase]}
         </p>
         <p className="text-xs text-[var(--color-text-muted)]">
-          {prog ? `${prog.numPeers} peers · ${Math.round(prog.progress * 100)}%` : 'Resolving metadata...'}
+          {prog ? `${prog.numPeers} connected` : 'Resolving metadata...'}
         </p>
         <button
           type="button"
@@ -753,7 +774,7 @@ export default function Player() {
 
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-            {torrent?.name || 'Loading...'}
+            {playbackTitle || 'Loading...'}
           </h1>
           <p className="text-xs text-[var(--color-text-muted)]">
             {torrent ? formatBytes(torrent.totalSize) : '-'}
@@ -764,7 +785,7 @@ export default function Player() {
         </div>
 
         {/* File Selector */}
-        {videoFiles.length > 1 && (
+        {(videoFiles.length > 1 || (torrent?.requiresFileSelection && !manualFileSelectionComplete)) && (
           <div className="relative">
             <button
               onClick={() => setShowFileSelector(!showFileSelector)}
@@ -807,6 +828,11 @@ export default function Player() {
 
       {/* Video Player */}
       <div className="px-4">
+        {torrent?.requiresFileSelection && !manualFileSelectionComplete && !streamURL && (
+          <div className="mb-3 rounded-lg border border-amber-300/15 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/70" role="alert">
+            {torrent.fileSelectionMessage || 'Choose the requested episode file to continue.'}
+          </div>
+        )}
         {phase !== 'playing' && streamURL && (
           <div className="mb-2 rounded-lg bg-[var(--color-bg-tertiary)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
             {PHASE_LABELS[phase]}
@@ -851,20 +877,8 @@ export default function Player() {
           numPeers={prog?.numPeers ?? 0}
           downloadSpeed={prog?.downloadSpeed ?? 0}
           uploadSpeed={prog?.uploadSpeed ?? 0}
-          progress={prog?.progress ?? 0}
           ratio={prog?.ratio ?? 0}
         />
-
-        {/* Buffer Indicator */}
-        <div className="glass rounded-xl p-4">
-          <BufferIndicator
-            progress={prog?.progress ?? 0}
-            bufferProgress={prog?.bufferProgress ?? 0}
-            downloadSpeed={prog?.downloadSpeed ?? 0}
-            uploadSpeed={prog?.uploadSpeed ?? 0}
-            peers={prog?.numPeers ?? 0}
-          />
-        </div>
       </div>
     </div>
   )

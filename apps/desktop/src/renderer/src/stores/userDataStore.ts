@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand'
+import { preserveHistoryMetadata } from '../lib/history-policy'
 
 export interface WatchHistoryEntry {
   movieId: string
@@ -87,8 +88,10 @@ export const useUserDataStore = create<UserDataState>((set, get) => ({
   addToHistory: (entry) => {
     set((state) => {
       // Remove existing entry for same movie (will re-add at top)
+      const existing = state.history.find((item) => item.movieId === entry.movieId)
+      const preserved = preserveHistoryMetadata(existing, entry)
       const filtered = state.history.filter((e) => e.movieId !== entry.movieId)
-      const updated = [{ ...entry, watchedAt: Date.now() }, ...filtered].slice(0, 50) // keep last 50
+      const updated = [{ ...preserved, watchedAt: Date.now() }, ...filtered].slice(0, 50) // keep last 50
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updated))
       return { history: updated }
     })

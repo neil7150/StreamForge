@@ -33,6 +33,22 @@ export interface PeerConnectionDiagnostics {
   byTransport: PeerTransportCounts
 }
 
+export interface PeerDiscoveryRefreshState {
+  connected: number
+  pending: number
+}
+
+/**
+ * Request another tracker announce only when the stream has too few live
+ * connections and is not already working through a useful queue of peers.
+ */
+export function shouldRefreshPeerDiscovery({
+  connected,
+  pending
+}: PeerDiscoveryRefreshState): boolean {
+  return connected < 8 && pending < 20
+}
+
 interface InternalPeer {
   id?: string
   type?: string

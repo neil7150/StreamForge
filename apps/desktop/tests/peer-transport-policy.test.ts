@@ -5,8 +5,16 @@ import {
   buildPeerConnectionDiagnostics,
   createPeerDiscoveryStats,
   describeConnectedPeer,
-  recordPeerDiscovery
+  recordPeerDiscovery,
+  shouldRefreshPeerDiscovery
 } from '../src/main/torrent/peer-transport-policy.ts'
+
+test('refreshes discovery only when both live and pending peer counts are low', () => {
+  assert.equal(shouldRefreshPeerDiscovery({ connected: 0, pending: 0 }), true)
+  assert.equal(shouldRefreshPeerDiscovery({ connected: 7, pending: 19 }), true)
+  assert.equal(shouldRefreshPeerDiscovery({ connected: 8, pending: 0 }), false)
+  assert.equal(shouldRefreshPeerDiscovery({ connected: 2, pending: 20 }), false)
+})
 
 test('arms immediate TCP fallback only for outgoing uTP peers', () => {
   const utpPeer = { type: 'utpOutgoing', source: 'tracker', retries: 0 }

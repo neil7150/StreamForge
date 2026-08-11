@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowRight, Circle, X } from 'lucide-react'
 import SmartSearchInput from '../components/ui/SmartSearchInput'
 import StreamArtwork from '../components/ui/StreamArtwork'
-import { useTorrentStore } from '../stores/torrentStore'
+import { useTorrentStore, type PlaybackDisplayMetadata } from '../stores/torrentStore'
 import { useUserDataStore } from '../stores/userDataStore'
 import { extractInfoHash, formatBytes, formatSpeed } from '../lib/utils'
 
@@ -14,16 +14,18 @@ export default function Home() {
   const removeTorrent = useTorrentStore((state) => state.removeTorrent)
   const streams = useTorrentStore((state) => state.streams)
   const progress = useTorrentStore((state) => state.progress)
+  const streamDisplayMetadata = useTorrentStore((state) => state.streamDisplayMetadata)
   const isLoading = useTorrentStore((state) => state.isLoading)
   const error = useTorrentStore((state) => state.error)
   const clearError = useTorrentStore((state) => state.clearError)
   const history = useUserDataStore((state) => state.history)
+  const removeFromHistory = useUserDataStore((state) => state.removeFromHistory)
 
-  const handleMagnet = useCallback((magnetURI: string) => {
+  const handleMagnet = useCallback((magnetURI: string, displayMetadata?: PlaybackDisplayMetadata) => {
     clearError()
     const hash = extractInfoHash(magnetURI)
     if (!hash) return
-    void addTorrent(magnetURI).catch(() => {})
+    void addTorrent(magnetURI, undefined, displayMetadata).catch(() => {})
     navigate('/player/' + hash)
   }, [addTorrent, clearError, navigate])
 
@@ -41,9 +43,9 @@ export default function Home() {
   const activeStreams = Array.from(streams.values())
   const recentHistory = history.slice(0, 6)
 
-  const resume = (movieId: string, magnetURI: string) => {
+  const resume = (movieId: string, magnetURI: string, displayMetadata: PlaybackDisplayMetadata) => {
     if (streams.has(movieId)) navigate('/player/' + movieId)
-    else if (magnetURI) handleMagnet(magnetURI)
+    else if (magnetURI) handleMagnet(magnetURI, displayMetadata)
   }
 
   return (
@@ -73,16 +75,16 @@ export default function Home() {
             <div className="divide-y divide-white/[0.055] rounded-xl border border-white/[0.06] bg-[#141619]">
               {activeStreams.map((stream) => {
                 const stats = progress.get(stream.infoHash)
+                const display = streamDisplayMetadata.get(stream.infoHash.toLowerCase())
                 return (
                   <article key={stream.infoHash} className="flex min-w-0 items-center gap-4 px-4 py-3">
                     <button onClick={() => navigate('/player/' + stream.infoHash)} className="h-12 w-20 shrink-0 overflow-hidden rounded-md">
-                      <StreamArtwork title={stream.name || 'Stream'} className="h-full w-full" showPlay />
+                      <StreamArtwork title={display?.title || stream.name || 'Stream'} imageUrl={display?.posterUrl} className="h-full w-full" showPlay />
                     </button>
                     <button onClick={() => navigate('/player/' + stream.infoHash)} className="min-w-0 flex-1 text-left">
-                      <h3 className="truncate text-[12px] font-medium text-white/78">{stream.name || 'Resolving stream…'}</h3>
+                      <h3 className="truncate text-[12px] font-medium text-white/78">{display?.title || stream.name || 'Resolving stream…'}</h3>
                       <p className="mt-1 text-[10px] text-white/30">{formatBytes(stream.totalSize)}{stats ? ' · ' + stats.numPeers + ' peers · ' + formatSpeed(stats.downloadSpeed) : ''}</p>
                     </button>
-                    <div className="w-28"><div className="h-1 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full bg-teal-300" style={{ width: ((stats?.progress ?? 0) * 100) + '%' }} /></div></div>
                     <button onClick={() => void removeTorrent(stream.infoHash)} className="flex h-8 w-8 items-center justify-center rounded-md text-white/22 hover:bg-white/[0.05] hover:text-white/60" title="Remove stream"><X className="h-3.5 w-3.5" /></button>
                   </article>
                 )
@@ -99,10 +101,25 @@ export default function Home() {
           {recentHistory.length > 0 ? (
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
               {recentHistory.map((entry) => (
-                <button key={entry.movieId} onClick={() => resume(entry.movieId, entry.magnetURI)} disabled={!entry.magnetURI && !streams.has(entry.movieId)} className="group min-w-0 text-left disabled:cursor-default">
-                  <StreamArtwork title={entry.title} subtitle={Math.round(entry.progress * 100) + '% watched'} progress={entry.progress} showPlay className="aspect-[1.5/1] w-full rounded-lg transition-colors group-hover:border-white/15" />
-                  <h3 className="mt-2 truncate text-[11px] font-medium text-white/58 group-hover:text-white/80">{entry.title}</h3>
-                </button>
+                <article key={entry.movieId} className="group relative min-w-0">
+                  <button
+                    onClick={() => resume(entry.movieId, entry.magnetURI, { title: entry.title, posterUrl: entry.poster || null })}
+                    disabled={!entry.magnetURI && !streams.has(entry.movieId)}
+                    className="w-full min-w-0 text-left disabled:cursor-default"
+                  >
+                    <StreamArtwork title={entry.title} imageUrl={entry.poster} subtitle={Math.round(entry.progress * 100) + '% watched'} progress={entry.progress} showPlay className="aspect-[1.5/1] w-full rounded-lg transition-colors group-hover:border-white/15" />
+                    <h3 className="mt-2 truncate text-[11px] font-medium text-white/58 group-hover:text-white/80">{entry.title}</h3>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeFromHistory(entry.movieId)}
+                    className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-black/65 text-white/55 shadow-sm backdrop-blur-sm hover:bg-red-950/90 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+                    title={`Remove ${entry.title} from recently watched`}
+                    aria-label={`Remove ${entry.title} from recently watched`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </article>
               ))}
             </div>
           ) : (

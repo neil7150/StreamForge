@@ -1,6 +1,11 @@
 import { create } from 'zustand'
-import type { TorrentInfo, TorrentProgress } from '../../../preload/index.d'
+import type { PreferredEpisodeFile, TorrentInfo, TorrentProgress } from '../../../preload/index.d'
 import { extractInfoHash } from '../lib/utils'
+
+export interface PlaybackDisplayMetadata {
+  title: string
+  posterUrl: string | null
+}
 
 interface TorrentState {
   /** Stream-mode torrents (ephemeral) */
@@ -15,9 +20,15 @@ interface TorrentState {
   isLoading: boolean
   error: string | null
   streamMagnets: Map<string, string>
+  streamPreferredEpisodes: Map<string, PreferredEpisodeFile>
+  streamDisplayMetadata: Map<string, PlaybackDisplayMetadata>
 
   // Streaming (ephemeral)
-  addTorrent: (magnetURI: string) => Promise<TorrentInfo>
+  addTorrent: (
+    magnetURI: string,
+    preferredEpisode?: PreferredEpisodeFile,
+    displayMetadata?: PlaybackDisplayMetadata
+  ) => Promise<TorrentInfo>
   cleanupStream: (infoHash: string) => Promise<void>
   loadStreams: () => Promise<void>
   retryStream: (infoHash: string) => Promise<TorrentInfo>
@@ -44,30 +55,46 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   isLoading: false,
   error: null,
   streamMagnets: new Map(),
+  streamPreferredEpisodes: new Map(),
+  streamDisplayMetadata: new Map(),
 
   // ─── Streaming (ephemeral) ───────────────────────────────────────
 
-  addTorrent: async (magnetURI: string) => {
+  addTorrent: async (
+    magnetURI: string,
+    preferredEpisode?: PreferredEpisodeFile,
+    displayMetadata?: PlaybackDisplayMetadata
+  ) => {
     const incomingHash = extractInfoHash(magnetURI)
     set((state) => {
       const streamMagnets = new Map(state.streamMagnets)
       const torrentErrors = new Map(state.torrentErrors)
+      const streamPreferredEpisodes = new Map(state.streamPreferredEpisodes)
+      const streamDisplayMetadata = new Map(state.streamDisplayMetadata)
       if (incomingHash) {
         streamMagnets.set(incomingHash, magnetURI)
+        if (preferredEpisode) streamPreferredEpisodes.set(incomingHash, preferredEpisode)
+        else streamPreferredEpisodes.delete(incomingHash)
+        if (displayMetadata) streamDisplayMetadata.set(incomingHash, displayMetadata)
         torrentErrors.delete(incomingHash)
       }
-      return { isLoading: true, error: null, streamMagnets, torrentErrors }
+      return { isLoading: true, error: null, streamMagnets, streamPreferredEpisodes, streamDisplayMetadata, torrentErrors }
     })
     try {
-      const info = await window.torrentAPI.addTorrent(magnetURI)
+      const info = await window.torrentAPI.addTorrent(magnetURI, preferredEpisode)
       set((state) => {
         const streams = new Map(state.streams)
         const streamMagnets = new Map(state.streamMagnets)
         const torrentErrors = new Map(state.torrentErrors)
+        const streamPreferredEpisodes = new Map(state.streamPreferredEpisodes)
+        const streamDisplayMetadata = new Map(state.streamDisplayMetadata)
         streams.set(info.infoHash, info)
         streamMagnets.set(info.infoHash.toLowerCase(), magnetURI)
+        if (preferredEpisode) streamPreferredEpisodes.set(info.infoHash.toLowerCase(), preferredEpisode)
+        else streamPreferredEpisodes.delete(info.infoHash.toLowerCase())
+        if (displayMetadata) streamDisplayMetadata.set(info.infoHash.toLowerCase(), displayMetadata)
         torrentErrors.delete(info.infoHash.toLowerCase())
-        return { streams, streamMagnets, torrentErrors, isLoading: false }
+        return { streams, streamMagnets, streamPreferredEpisodes, streamDisplayMetadata, torrentErrors, isLoading: false }
       })
       return info
     } catch (err) {
@@ -98,12 +125,16 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         const streams = new Map(state.streams)
         const progress = new Map(state.progress)
         const streamMagnets = new Map(state.streamMagnets)
+        const streamPreferredEpisodes = new Map(state.streamPreferredEpisodes)
+        const streamDisplayMetadata = new Map(state.streamDisplayMetadata)
         const torrentErrors = new Map(state.torrentErrors)
         streams.delete(infoHash)
         progress.delete(infoHash)
         streamMagnets.delete(infoHash.toLowerCase())
+        streamPreferredEpisodes.delete(infoHash.toLowerCase())
+        streamDisplayMetadata.delete(infoHash.toLowerCase())
         torrentErrors.delete(infoHash.toLowerCase())
-        return { streams, progress, streamMagnets, torrentErrors, error: null }
+        return { streams, progress, streamMagnets, streamPreferredEpisodes, streamDisplayMetadata, torrentErrors, error: null }
       })
     } catch (err) {
       console.warn('[TorrentStore] Failed to cleanup stream:', err)
@@ -125,9 +156,11 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   retryStream: async (infoHash: string) => {
     const magnetURI = get().streamMagnets.get(infoHash.toLowerCase())
+    const preferredEpisode = get().streamPreferredEpisodes.get(infoHash.toLowerCase())
+    const displayMetadata = get().streamDisplayMetadata.get(infoHash.toLowerCase())
     if (!magnetURI) throw new Error('The original magnet link is no longer available. Choose the source again.')
     await get().cleanupStream(infoHash)
-    return get().addTorrent(magnetURI)
+    return get().addTorrent(magnetURI, preferredEpisode, displayMetadata)
   },
   // ─── Downloads (persistent) ──────────────────────────────────────
 
@@ -172,12 +205,16 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         const progress = new Map(state.progress)
         const streamMagnets = new Map(state.streamMagnets)
         const torrentErrors = new Map(state.torrentErrors)
+        const streamPreferredEpisodes = new Map(state.streamPreferredEpisodes)
+        const streamDisplayMetadata = new Map(state.streamDisplayMetadata)
         streams.delete(infoHash)
         downloads.delete(infoHash)
         progress.delete(infoHash)
         streamMagnets.delete(infoHash.toLowerCase())
+        streamPreferredEpisodes.delete(infoHash.toLowerCase())
+        streamDisplayMetadata.delete(infoHash.toLowerCase())
         torrentErrors.delete(infoHash.toLowerCase())
-        return { streams, downloads, progress, streamMagnets, torrentErrors, error: null }
+        return { streams, downloads, progress, streamMagnets, streamPreferredEpisodes, streamDisplayMetadata, torrentErrors, error: null }
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to remove torrent'

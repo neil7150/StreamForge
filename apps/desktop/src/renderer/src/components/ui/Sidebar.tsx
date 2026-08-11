@@ -21,7 +21,13 @@ export default function Sidebar() {
     <aside className="flex w-[196px] shrink-0 flex-col border-r border-white/[0.06] bg-[#111315] px-3 py-4">
       <nav className="space-y-1">
         {navItems.map((item) => {
-          const active = item.path === '/' ? location.pathname === '/' : location.pathname.startsWith(item.path)
+          const active = item.path === '/'
+            ? location.pathname === '/'
+            : item.path === '/search'
+              ? location.pathname.startsWith('/search')
+                || location.pathname.startsWith('/series/')
+                || location.pathname.startsWith('/movie/')
+              : location.pathname.startsWith(item.path)
           return (
             <NavLink
               key={item.path}

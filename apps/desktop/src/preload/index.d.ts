@@ -15,6 +15,14 @@ export interface TorrentInfo {
   streamURL: string
   ready: boolean
   mode: TorrentMode
+  selectedFileIndex: number | null
+  requiresFileSelection: boolean
+  fileSelectionMessage: string | null
+}
+
+export interface PreferredEpisodeFile {
+  seasonNumber: number
+  episodeNumber: number
 }
 
 export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
@@ -48,6 +56,89 @@ export interface TorrentSearchResponse {
   results: TorrentSearchResult[]
   providers: TorrentProviderStatus[]
   cache?: 'miss' | 'fresh' | 'stale'
+}
+
+export interface EpisodeTorrentSearchRequest {
+  seriesTitle: string
+  seasonNumber: number
+  episodeNumber: number
+  episodeTitle?: string
+}
+
+export interface MovieTorrentSearchRequest {
+  title: string
+  year?: number
+}
+
+export interface SeriesSummary {
+  id: number
+  title: string
+  posterUrl: string | null
+  year: number | null
+  status: string | null
+  network: string | null
+  type: string | null
+  language: string | null
+  genres: string[]
+  rating: number | null
+  summary: string | null
+  tvmazeUrl: string | null
+  imdbId: string | null
+}
+
+export interface SeriesDetails extends SeriesSummary {
+  premiered: string | null
+  ended: string | null
+  runtimeMinutes: number | null
+  officialSite: string | null
+  originalImageUrl: string | null
+}
+
+export interface SeasonSummary {
+  id: number
+  seriesId: number
+  number: number
+  name: string | null
+  episodeCount: number | null
+  premiereDate: string | null
+  endDate: string | null
+  network: string | null
+  posterUrl: string | null
+  summary: string | null
+}
+
+export interface EpisodeSummary {
+  id: number
+  seasonId: number
+  seasonNumber: number
+  episodeNumber: number | null
+  title: string
+  type: string | null
+  airDate: string | null
+  airStamp: string | null
+  runtimeMinutes: number | null
+  stillUrl: string | null
+  summary: string | null
+  tvmazeUrl: string | null
+}
+
+export interface MovieSummary {
+  id: string
+  title: string
+  year: number | null
+  posterUrl: string | null
+  rating: number | null
+  genres: string[]
+  language: string | null
+  imdbId: string | null
+}
+
+export interface MovieDetails extends MovieSummary {
+  summary: string | null
+  runtimeMinutes: number | null
+  backdropUrl: string | null
+  contentRating: string | null
+  ytsUrl: string | null
 }
 export interface TorrentProgress {
   infoHash: string
@@ -108,7 +199,7 @@ export interface MediaInfo {
 
 export interface TorrentAPI {
   // Streaming (ephemeral)
-  addTorrent: (magnetURI: string) => Promise<TorrentInfo>
+  addTorrent: (magnetURI: string, preferredEpisode?: PreferredEpisodeFile) => Promise<TorrentInfo>
   getStreams: () => Promise<TorrentInfo[]>
   cleanupStream: (infoHash: string) => Promise<void>
 
@@ -133,6 +224,16 @@ export interface TorrentAPI {
 
   // Search
   searchTorrents: (query: string) => Promise<TorrentSearchResponse>
+  searchEpisodeTorrents: (request: EpisodeTorrentSearchRequest) => Promise<TorrentSearchResponse>
+  searchMovieTorrents: (request: MovieTorrentSearchRequest) => Promise<TorrentSearchResponse>
+
+  // Series catalog
+  searchSeries: (query: string) => Promise<SeriesSummary[]>
+  getSeries: (seriesId: number) => Promise<SeriesDetails>
+  getSeasons: (seriesId: number) => Promise<SeasonSummary[]>
+  getSeasonEpisodes: (seasonId: number) => Promise<EpisodeSummary[]>
+  searchMovies: (query: string) => Promise<MovieSummary[]>
+  getMovie: (movieId: string) => Promise<MovieDetails>
 
   // Cache
   getCacheSize: () => Promise<number>

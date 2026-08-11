@@ -1,4 +1,5 @@
-﻿import { Film, Play } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Film, Play } from 'lucide-react'
 import clsx from 'clsx'
 
 interface StreamArtworkProps {
@@ -7,6 +8,7 @@ interface StreamArtworkProps {
   progress?: number
   className?: string
   showPlay?: boolean
+  imageUrl?: string | null
 }
 
 const palettes = [
@@ -22,15 +24,37 @@ function paletteFor(title: string) {
   return palettes[seed % palettes.length]
 }
 
-export default function StreamArtwork({ title, subtitle, progress = 0, className, showPlay = false }: StreamArtworkProps) {
+export default function StreamArtwork({
+  title,
+  subtitle,
+  progress = 0,
+  className,
+  showPlay = false,
+  imageUrl
+}: StreamArtworkProps) {
   const initial = title.trim().charAt(0).toUpperCase() || 'S'
   const palette = paletteFor(title)
+  const [imageFailed, setImageFailed] = useState(false)
+  const showImage = Boolean(imageUrl) && !imageFailed
+
+  useEffect(() => setImageFailed(false), [imageUrl])
 
   return (
     <div className={clsx('relative overflow-hidden border border-white/[0.06]', className)} style={{ backgroundColor: palette.background }} aria-label={title}>
-      <Film className="absolute left-4 top-4 h-4 w-4 text-white/22" />
-      <span className="absolute bottom-8 left-4 text-4xl font-semibold tracking-[-0.05em]" style={{ color: palette.foreground }}>{initial}</span>
-      {subtitle && <p className="absolute inset-x-4 bottom-3 truncate text-[10px] text-white/42">{subtitle}</p>}
+      {showImage ? (
+        <img src={imageUrl!} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImageFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+      ) : (
+        <>
+          <Film className="absolute left-4 top-4 h-4 w-4 text-white/22" />
+          <span className="absolute bottom-8 left-4 text-4xl font-semibold tracking-[-0.05em]" style={{ color: palette.foreground }}>{initial}</span>
+        </>
+      )}
+      {subtitle && (
+        <>
+          <span className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/80 to-transparent" />
+          <p className="absolute inset-x-4 bottom-3 truncate text-[10px] text-white/70">{subtitle}</p>
+        </>
+      )}
       {showPlay && (
         <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#151719]">

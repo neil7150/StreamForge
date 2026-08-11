@@ -3,8 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 // Custom API exposed to renderer via contextBridge
 const torrentAPI = {
   // ─── Streaming (ephemeral) ───────────────────────────────────────
-  addTorrent: (magnetURI: string): Promise<TorrentInfo> =>
-    ipcRenderer.invoke('torrent:add', magnetURI),
+  addTorrent: (magnetURI: string, preferredEpisode?: PreferredEpisodeFile): Promise<TorrentInfo> =>
+    ipcRenderer.invoke('torrent:add', magnetURI, preferredEpisode),
 
   getStreams: (): Promise<TorrentInfo[]> =>
     ipcRenderer.invoke('torrent:get-streams'),
@@ -67,6 +67,31 @@ const torrentAPI = {
   searchTorrents: (query: string): Promise<TorrentSearchResponse> =>
     ipcRenderer.invoke('search:torrents', query),
 
+  searchEpisodeTorrents: (request: EpisodeTorrentSearchRequest): Promise<TorrentSearchResponse> =>
+    ipcRenderer.invoke('search:episode-torrents', request),
+
+  searchMovieTorrents: (request: MovieTorrentSearchRequest): Promise<TorrentSearchResponse> =>
+    ipcRenderer.invoke('search:movie-torrents', request),
+
+  // Series catalog
+  searchSeries: (query: string): Promise<SeriesSummary[]> =>
+    ipcRenderer.invoke('catalog:search-series', query),
+
+  getSeries: (seriesId: number): Promise<SeriesDetails> =>
+    ipcRenderer.invoke('catalog:get-series', seriesId),
+
+  getSeasons: (seriesId: number): Promise<SeasonSummary[]> =>
+    ipcRenderer.invoke('catalog:get-seasons', seriesId),
+
+  getSeasonEpisodes: (seasonId: number): Promise<EpisodeSummary[]> =>
+    ipcRenderer.invoke('catalog:get-season-episodes', seasonId),
+
+  searchMovies: (query: string): Promise<MovieSummary[]> =>
+    ipcRenderer.invoke('catalog:search-movies', query),
+
+  getMovie: (movieId: string): Promise<MovieDetails> =>
+    ipcRenderer.invoke('catalog:get-movie', movieId),
+
   // ─── Cache management ────────────────────────────────────────────
   getCacheSize: (): Promise<number> =>
     ipcRenderer.invoke('cache:get-size'),
@@ -105,6 +130,14 @@ export interface TorrentInfo {
   streamURL: string
   ready: boolean
   mode: TorrentMode
+  selectedFileIndex: number | null
+  requiresFileSelection: boolean
+  fileSelectionMessage: string | null
+}
+
+export interface PreferredEpisodeFile {
+  seasonNumber: number
+  episodeNumber: number
 }
 
 export interface MediaAudioTrack {
@@ -170,6 +203,89 @@ export interface TorrentSearchResponse {
   results: TorrentSearchResult[]
   providers: TorrentProviderStatus[]
   cache?: 'miss' | 'fresh' | 'stale'
+}
+
+export interface EpisodeTorrentSearchRequest {
+  seriesTitle: string
+  seasonNumber: number
+  episodeNumber: number
+  episodeTitle?: string
+}
+
+export interface MovieTorrentSearchRequest {
+  title: string
+  year?: number
+}
+
+export interface SeriesSummary {
+  id: number
+  title: string
+  posterUrl: string | null
+  year: number | null
+  status: string | null
+  network: string | null
+  type: string | null
+  language: string | null
+  genres: string[]
+  rating: number | null
+  summary: string | null
+  tvmazeUrl: string | null
+  imdbId: string | null
+}
+
+export interface SeriesDetails extends SeriesSummary {
+  premiered: string | null
+  ended: string | null
+  runtimeMinutes: number | null
+  officialSite: string | null
+  originalImageUrl: string | null
+}
+
+export interface SeasonSummary {
+  id: number
+  seriesId: number
+  number: number
+  name: string | null
+  episodeCount: number | null
+  premiereDate: string | null
+  endDate: string | null
+  network: string | null
+  posterUrl: string | null
+  summary: string | null
+}
+
+export interface EpisodeSummary {
+  id: number
+  seasonId: number
+  seasonNumber: number
+  episodeNumber: number | null
+  title: string
+  type: string | null
+  airDate: string | null
+  airStamp: string | null
+  runtimeMinutes: number | null
+  stillUrl: string | null
+  summary: string | null
+  tvmazeUrl: string | null
+}
+
+export interface MovieSummary {
+  id: string
+  title: string
+  year: number | null
+  posterUrl: string | null
+  rating: number | null
+  genres: string[]
+  language: string | null
+  imdbId: string | null
+}
+
+export interface MovieDetails extends MovieSummary {
+  summary: string | null
+  runtimeMinutes: number | null
+  backdropUrl: string | null
+  contentRating: string | null
+  ytsUrl: string | null
 }
 export interface TorrentProgress {
   infoHash: string

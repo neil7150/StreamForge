@@ -273,12 +273,20 @@ async function searchYTS(query: string): Promise<TorrentSearchResult[]> {
   return results
 }
 
-async function executeProviderSearch(query: string): Promise<TorrentSearchResponse> {
-  const outcomes = await Promise.all([
-    runProvider('APIBay', () => searchAPIBay(query)),
-    runProvider('Nyaa', () => searchNyaa(query)),
-    runProvider('YTS', () => searchYTS(query))
-  ])
+const PROVIDER_SEARCHES: Record<TorrentProviderName, (query: string) => Promise<TorrentSearchResult[]>> = {
+  APIBay: searchAPIBay,
+  Nyaa: searchNyaa,
+  YTS: searchYTS
+}
+
+async function executeProviderSearch(
+  query: string,
+  cacheKey: string,
+  providers: TorrentProviderName[]
+): Promise<TorrentSearchResponse> {
+  const outcomes = await Promise.all(providers.map((name) => (
+    runProvider(name, () => PROVIDER_SEARCHES[name](query))
+  )))
 
   const response: TorrentSearchResponse = {
     results: deduplicateResults(outcomes.flatMap((outcome) => outcome.results)),
@@ -287,11 +295,11 @@ async function executeProviderSearch(query: string): Promise<TorrentSearchRespon
   }
 
   if (response.providers.some((provider) => provider.status === 'ok')) {
-    searchCache.set(query, response)
+    searchCache.set(cacheKey, response)
     return response
   }
 
-  const stale = searchCache.getStale(query)
+  const stale = searchCache.getStale(cacheKey)
   if (stale && stale.response.results.length > 0) {
     return { results: stale.response.results, providers: response.providers, cache: 'stale' }
   }
@@ -299,8 +307,13 @@ async function executeProviderSearch(query: string): Promise<TorrentSearchRespon
   return response
 }
 
-export async function searchTorrentProviders(query: string): Promise<TorrentSearchResponse> {
-  const fresh = searchCache.getFresh(query)
+export async function searchTorrentProviders(
+  query: string,
+  providers: TorrentProviderName[] = ['APIBay', 'Nyaa', 'YTS']
+): Promise<TorrentSearchResponse> {
+  const uniqueProviders = [...new Set(providers)]
+  const cacheKey = `${uniqueProviders.join(',')}:${query}`
+  const fresh = searchCache.getFresh(cacheKey)
   if (fresh) {
     return {
       ...fresh.response,
@@ -309,11 +322,12 @@ export async function searchTorrentProviders(query: string): Promise<TorrentSear
     }
   }
 
-  const key = SearchResponseCache.key(query)
+  const key = SearchResponseCache.key(cacheKey)
   const existing = inFlightSearches.get(key)
   if (existing) return existing
 
-  const pending = executeProviderSearch(query).finally(() => inFlightSearches.delete(key))
+  const pending = executeProviderSearch(query, cacheKey, uniqueProviders)
+    .finally(() => inFlightSearches.delete(key))
   inFlightSearches.set(key, pending)
   return pending
 }
