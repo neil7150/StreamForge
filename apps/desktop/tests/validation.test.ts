@@ -68,6 +68,14 @@ test('normalizes and bounds structured episode searches', () => {
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'X', seasonNumber: 1, episodeNumber: 2 }))
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: -1, episodeNumber: 2 }))
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 0 }))
+  assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: 'Example Show', seasonNumber: 1, episodeNumber: 2,
+    imdbId: 'TT1234567', torznabUrl: 'http://localhost:9117/api', torznabApiKey: 'secret'
+  }), {
+    seriesTitle: 'Example Show', seasonNumber: 1, episodeNumber: 2, episodeTitle: undefined,
+    imdbId: 'tt1234567', torznabUrl: 'http://localhost:9117/api', torznabApiKey: 'secret'
+  })
+  assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2, torznabUrl: 'file:///tmp/feed' }))
 })
 
 test('validates preferred episode file selections', () => {
@@ -88,4 +96,5 @@ test('normalizes and bounds structured movie searches', () => {
   assert.deepEqual(requireMovieSearchRequest({ title: 'Example Movie' }), { title: 'Example Movie', year: undefined })
   assert.throws(() => requireMovieSearchRequest({ title: 'X', year: 2024 }))
   assert.throws(() => requireMovieSearchRequest({ title: 'Movie', year: 1800 }))
+  assert.throws(() => requireMovieSearchRequest({ title: 'Movie', torznabUrl: 'https://user:password@example.com/api' }))
 })

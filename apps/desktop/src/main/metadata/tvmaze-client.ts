@@ -289,6 +289,20 @@ export class TVMazeClient {
     })
   }
 
+  async getPopularSeries(): Promise<SeriesSummary[]> {
+    return this.cached('popular-series', SEARCH_CACHE_TTL_MS, async () => {
+      const payload = await this.request('/shows?page=0')
+      if (!Array.isArray(payload)) throw new TVMazeClientError('TVMaze returned invalid browse results')
+      return payload
+        .flatMap((value) => {
+          const show = normalizeSeries(value)
+          return show ? [toSeriesSummary(show)] : []
+        })
+        .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+        .slice(0, 30)
+    })
+  }
+
   async getSeries(seriesId: number): Promise<SeriesDetails> {
     return this.cached(`series:${seriesId}`, CATALOG_CACHE_TTL_MS, async () => {
       const normalized = normalizeSeries(await this.request(`/shows/${seriesId}`))

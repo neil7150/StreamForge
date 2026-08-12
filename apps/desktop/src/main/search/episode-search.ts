@@ -19,7 +19,8 @@ export async function searchEpisodeTorrentProviders(
 ): Promise<TorrentSearchResponse> {
   const response = await searchTorrentProviders(
     buildEpisodeSearchQuery(request),
-    ['APIBay', 'Nyaa']
+    ['APIBay', 'Nyaa', 'EZTV', ...(request.torznabUrl ? ['Torznab' as const] : [])],
+    request
   )
   const results = response.results.filter((result) => (
     isVideoResult(result) && matchesEpisodeRelease(result.name, request)

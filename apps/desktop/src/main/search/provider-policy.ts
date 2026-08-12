@@ -1,4 +1,10 @@
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
+
+export interface SourceProviderConfig {
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
+}
 
 export interface TorrentSearchResult {
   id: string

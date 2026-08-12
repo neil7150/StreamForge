@@ -13,7 +13,7 @@ test('normalizes movie search artwork and identifying metadata', async () => {
     return response({ data: { movies: [{ id: 7, title_english: 'Example Movie', year: 2024, rating: 7.2, genres: ['Drama'], language: 'en', imdb_code: 'tt1234567', medium_cover_image: 'http://images.example/poster.jpg' }] } })
   } })
   const movies = await client.searchMovies('Example Movie')
-  assert.equal(urls[0], 'https://yts.mx/api/v2/list_movies.json?limit=20&query_term=Example%20Movie')
+  assert.equal(urls[0], 'https://yts.bz/api/v2/list_movies.json?limit=20&query_term=Example%20Movie')
   assert.deepEqual(movies, [{ id: 7, title: 'Example Movie', year: 2024, posterUrl: 'https://images.example/poster.jpg', rating: 7.2, genres: ['Drama'], language: 'en', imdbId: 'tt1234567' }])
 })
 

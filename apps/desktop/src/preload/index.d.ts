@@ -20,12 +20,17 @@ export interface TorrentInfo {
   fileSelectionMessage: string | null
 }
 
+export interface QueuedDownloadResult {
+  infoHash: string
+  queued: boolean
+}
+
 export interface PreferredEpisodeFile {
   seasonNumber: number
   episodeNumber: number
 }
 
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
 
 export interface TorrentSearchResult {
   id: string
@@ -63,11 +68,34 @@ export interface EpisodeTorrentSearchRequest {
   seasonNumber: number
   episodeNumber: number
   episodeTitle?: string
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
 }
 
 export interface MovieTorrentSearchRequest {
   title: string
   year?: number
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
+}
+
+export interface OnlineSubtitleSearchRequest {
+  apiKey: string
+  query: string
+  language?: string
+  seasonNumber?: number
+  episodeNumber?: number
+}
+
+export interface OnlineSubtitleResult {
+  id: string
+  fileId: number
+  fileName: string
+  language: string
+  release: string | null
+  downloadCount: number
 }
 
 export interface SeriesSummary {
@@ -195,6 +223,13 @@ export interface MediaInfo {
   needsVideoTranscode: boolean
   needsAudioTranscode: boolean
   needsTranscode: boolean
+  chapters?: MediaChapter[]
+}
+
+export interface MediaChapter {
+  start: number
+  end: number
+  title: string | null
 }
 
 export interface TorrentAPI {
@@ -205,6 +240,7 @@ export interface TorrentAPI {
 
   // Downloads (persistent)
   addDownload: (magnetURI: string) => Promise<TorrentInfo>
+  queueDownload: (magnetURI: string, activeStreamInfoHash?: string) => Promise<QueuedDownloadResult>
   getDownloads: () => Promise<TorrentInfo[]>
   openDownloadFolder: () => Promise<void>
 
@@ -226,13 +262,17 @@ export interface TorrentAPI {
   searchTorrents: (query: string) => Promise<TorrentSearchResponse>
   searchEpisodeTorrents: (request: EpisodeTorrentSearchRequest) => Promise<TorrentSearchResponse>
   searchMovieTorrents: (request: MovieTorrentSearchRequest) => Promise<TorrentSearchResponse>
+  searchOnlineSubtitles: (request: OnlineSubtitleSearchRequest) => Promise<OnlineSubtitleResult[]>
+  downloadOnlineSubtitle: (apiKey: string, fileId: number) => Promise<string>
 
   // Series catalog
   searchSeries: (query: string) => Promise<SeriesSummary[]>
+  getPopularSeries: () => Promise<SeriesSummary[]>
   getSeries: (seriesId: number) => Promise<SeriesDetails>
   getSeasons: (seriesId: number) => Promise<SeasonSummary[]>
   getSeasonEpisodes: (seasonId: number) => Promise<EpisodeSummary[]>
   searchMovies: (query: string) => Promise<MovieSummary[]>
+  getPopularMovies: () => Promise<MovieSummary[]>
   getMovie: (movieId: string) => Promise<MovieDetails>
 
   // Cache

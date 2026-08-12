@@ -1,17 +1,21 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Activity, ArrowLeft, Film, ChevronDown, RotateCcw } from 'lucide-react'
+import { Activity, ArrowLeft, Captions, Download, Film, ChevronDown, Play, RotateCcw, SkipForward } from 'lucide-react'
 import clsx from 'clsx'
+import type { OnlineSubtitleResult } from '../../../preload/index.d'
 import VideoPlayer, { type PlaybackSeekRequest, type SubtitleTrack } from '../components/player/VideoPlayer'
 import TorrentHealth from '../components/player/TorrentHealth'
 import PlaybackDiagnosticsPanel from '../components/player/PlaybackDiagnosticsPanel'
 import { useTorrentStore } from '../stores/torrentStore'
 import { useUserDataStore } from '../stores/userDataStore'
-import { formatBytes } from '../lib/utils'
+import { extractInfoHash, formatBytes } from '../lib/utils'
 import { cancelScheduledStreamCleanup, scheduleStreamCleanup } from '../lib/stream-cleanup-scheduler'
 import { buildPlaybackDiagnosticsReport, type VideoElementDiagnostics } from '../lib/playback-diagnostics'
 import { formatResumeTime, getPlaybackResumeTime } from '../lib/playback-resume'
 import { createLatestTaskScheduler } from '../lib/latest-task-scheduler'
+import { rankSources } from '../lib/source-selection-policy'
+import { shouldAutomaticallyFallback } from '../lib/automatic-fallback-policy'
+import { usePlaybackSettingsStore } from '../stores/playbackSettingsStore'
 
 type PlayerMediaInfo = NonNullable<Awaited<ReturnType<Window['torrentAPI']['getMediaInfo']>>>
 
@@ -130,9 +134,15 @@ export default function Player() {
     infoHash ? s.streamDisplayMetadata.get(infoHash.toLowerCase()) : undefined
   ))
   const retryStream = useTorrentStore((s) => s.retryStream)
+  const addTorrent = useTorrentStore((s) => s.addTorrent)
+  const addDownload = useTorrentStore((s) => s.addDownload)
   const cleanupStream = useTorrentStore((s) => s.cleanupStream)
+  const playbackSettings = usePlaybackSettingsStore()
   const savedHistoryEntry = useUserDataStore((s) => (
-    infoHash ? s.history.find((entry) => entry.movieId === infoHash) : undefined
+    infoHash ? s.history.find((entry) => (
+      entry.movieId === infoHash
+      || Boolean(streamDisplayMetadata?.contentKey && entry.contentKey === streamDisplayMetadata.contentKey)
+    )) : undefined
   ))
 
   const [streamURL, setStreamURL] = useState<string | null>(null)
@@ -154,6 +164,15 @@ export default function Player() {
   const [lastSeekTarget, setLastSeekTarget] = useState<number | null>(null)
   const [lastPlaybackError, setLastPlaybackError] = useState<string | null>(null)
   const [resumeNoticeTime, setResumeNoticeTime] = useState<number | null>(null)
+  const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0)
+  const [upNextCountdown, setUpNextCountdown] = useState<number | null>(null)
+  const [nextEpisodeError, setNextEpisodeError] = useState<string | null>(null)
+  const [showOnlineSubtitles, setShowOnlineSubtitles] = useState(false)
+  const [onlineSubtitleResults, setOnlineSubtitleResults] = useState<OnlineSubtitleResult[]>([])
+  const [onlineSubtitleTracks, setOnlineSubtitleTracks] = useState<SubtitleTrack[]>([])
+  const [onlineSubtitleLoading, setOnlineSubtitleLoading] = useState(false)
+  const [onlineSubtitleError, setOnlineSubtitleError] = useState<string | null>(null)
+  const [downloadState, setDownloadState] = useState<'idle' | 'queueing' | 'queued' | 'started' | 'error'>('idle')
   const seekRequestRef = useRef(0)
   const rapidSkipSchedulerRef = useRef<ReturnType<typeof createLatestTaskScheduler> | null>(null)
   if (!rapidSkipSchedulerRef.current) {
@@ -161,6 +180,9 @@ export default function Player() {
   }
   const playbackSessionRef = useRef(crypto.randomUUID())
   const currentPlaybackTimeRef = useRef(0)
+  const fallbackAttemptedRef = useRef<string | null>(null)
+  const playbackStartedRef = useRef(false)
+  const smartDownloadedEpisodeRef = useRef<number | null>(null)
   const connectionStartedAtRef = useRef(Date.now())
   const isCancellingRef = useRef(false)
   const initialHistoryEntryRef = useRef(savedHistoryEntry)
@@ -168,6 +190,7 @@ export default function Player() {
   if (resumeHashRef.current !== infoHash) {
     resumeHashRef.current = infoHash
     initialHistoryEntryRef.current = savedHistoryEntry
+    playbackStartedRef.current = false
   }
   const playbackTitle = streamDisplayMetadata?.title.trim()
     || initialHistoryEntryRef.current?.title.trim()
@@ -176,6 +199,18 @@ export default function Player() {
   const playbackPoster = streamDisplayMetadata?.posterUrl?.trim()
     || initialHistoryEntryRef.current?.poster.trim()
     || ''
+  const playbackIdentity = useMemo(() => ({
+    contentKey: streamDisplayMetadata?.contentKey,
+    contentType: streamDisplayMetadata?.contentType,
+    catalogId: streamDisplayMetadata?.catalogId,
+    seriesId: streamDisplayMetadata?.seriesId,
+    seriesTitle: streamDisplayMetadata?.seriesTitle,
+    seriesImdbId: streamDisplayMetadata?.seriesImdbId,
+    episodeId: streamDisplayMetadata?.episodeId,
+    seasonNumber: streamDisplayMetadata?.seasonNumber,
+    episodeNumber: streamDisplayMetadata?.episodeNumber,
+    episodeTitle: streamDisplayMetadata?.episodeTitle
+  }), [streamDisplayMetadata])
 
   const cancelQueuedRapidSkip = useCallback(() => {
     rapidSkipSchedulerRef.current?.cancel()
@@ -186,7 +221,15 @@ export default function Player() {
   }, [phase])
 
   useEffect(() => {
+    setDownloadState('idle')
+  }, [infoHash])
+
+  useEffect(() => {
     if (streamError) {
+      if (playbackStartedRef.current) {
+        setLastPlaybackError(streamError)
+        return
+      }
       setError(streamError)
       setLoading(false)
     }
@@ -196,6 +239,7 @@ export default function Player() {
     if (!infoHash) return
     cancelQueuedRapidSkip()
     setError(null)
+    playbackStartedRef.current = false
     setLoading(true)
     setStreamURL(null)
     setMediaInfo(null)
@@ -213,13 +257,52 @@ export default function Player() {
     seekRequestRef.current = 0
     playbackSessionRef.current = crypto.randomUUID()
     try {
-      await retryStream(infoHash)
-      setConnectionAttempt((attempt) => attempt + 1)
+      const retried = await retryStream(infoHash)
+      if (retried.infoHash.toLowerCase() !== infoHash.toLowerCase()) {
+        navigate(`/player/${retried.infoHash}`, { replace: true })
+      } else {
+        setConnectionAttempt((attempt) => attempt + 1)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to retry the stream')
       setLoading(false)
     }
-  }, [cancelQueuedRapidSkip, infoHash, retryStream])
+  }, [cancelQueuedRapidSkip, infoHash, navigate, retryStream])
+
+  useEffect(() => {
+    if (!streamError || !infoHash) return
+    const candidates = streamDisplayMetadata?.sourceCandidates ?? []
+    const index = streamDisplayMetadata?.sourceIndex ?? -1
+    if (!shouldAutomaticallyFallback({
+      enabled: playbackSettings.automaticSourceFallback,
+      playbackStarted: playbackStartedRef.current,
+      currentSourceIndex: index,
+      sourceCount: candidates.length,
+      alreadyAttempted: fallbackAttemptedRef.current === infoHash
+    })) return
+    fallbackAttemptedRef.current = infoHash
+    void handleRetry()
+  }, [handleRetry, infoHash, playbackSettings.automaticSourceFallback, streamDisplayMetadata, streamError])
+
+  const handlePlaybackStateChange = useCallback((state: ConnectionPhase) => {
+    if (state === 'playing') {
+      playbackStartedRef.current = true
+      setError(null)
+    }
+    setPhase(state)
+  }, [])
+
+  const handleQueueDownload = useCallback(async () => {
+    if (!streamMagnet || downloadState === 'queueing' || downloadState === 'queued' || downloadState === 'started') return
+    setDownloadState('queueing')
+    try {
+      const result = await window.torrentAPI.queueDownload(streamMagnet, infoHash)
+      setDownloadState(result.queued ? 'queued' : 'started')
+    } catch (downloadError) {
+      console.error('[Player] Failed to queue download:', downloadError)
+      setDownloadState('error')
+    }
+  }, [downloadState, infoHash, streamMagnet])
 
   const handleCancelConnection = useCallback(() => {
     cancelQueuedRapidSkip()
@@ -296,9 +379,67 @@ export default function Player() {
   }, [mediaInfo, torrent])
 
   const subtitleTracks = useMemo(
-    () => [...embeddedSubtitleTracks, ...sidecarSubtitleTracks],
-    [embeddedSubtitleTracks, sidecarSubtitleTracks]
+    () => [...onlineSubtitleTracks, ...embeddedSubtitleTracks, ...sidecarSubtitleTracks],
+    [embeddedSubtitleTracks, onlineSubtitleTracks, sidecarSubtitleTracks]
   )
+
+  useEffect(() => () => {
+    for (const track of onlineSubtitleTracks) {
+      if (track.src?.startsWith('blob:')) URL.revokeObjectURL(track.src)
+    }
+  }, [onlineSubtitleTracks])
+
+  const searchOnlineSubtitleTracks = useCallback(async () => {
+    if (!playbackSettings.openSubtitlesApiKey) {
+      setOnlineSubtitleError('Add your OpenSubtitles API key in Settings first.')
+      setShowOnlineSubtitles(true)
+      return
+    }
+    setShowOnlineSubtitles(true)
+    setOnlineSubtitleLoading(true)
+    setOnlineSubtitleError(null)
+    try {
+      const results = await window.torrentAPI.searchOnlineSubtitles({
+        apiKey: playbackSettings.openSubtitlesApiKey,
+        query: streamDisplayMetadata?.seriesTitle || playbackTitle,
+        language: playbackSettings.preferredSubtitleLanguage,
+        seasonNumber: streamDisplayMetadata?.seasonNumber,
+        episodeNumber: streamDisplayMetadata?.episodeNumber
+      })
+      setOnlineSubtitleResults(results)
+      if (results.length === 0) setOnlineSubtitleError('No matching online subtitles were found.')
+    } catch (subtitleError) {
+      setOnlineSubtitleError(subtitleError instanceof Error ? subtitleError.message : 'Online subtitle search failed.')
+    } finally {
+      setOnlineSubtitleLoading(false)
+    }
+  }, [playbackSettings.openSubtitlesApiKey, playbackSettings.preferredSubtitleLanguage, playbackTitle, streamDisplayMetadata])
+
+  const addOnlineSubtitleTrack = useCallback(async (result: OnlineSubtitleResult) => {
+    setOnlineSubtitleLoading(true)
+    setOnlineSubtitleError(null)
+    try {
+      const content = await window.torrentAPI.downloadOnlineSubtitle(playbackSettings.openSubtitlesApiKey, result.fileId)
+      const url = URL.createObjectURL(new Blob([content], { type: 'text/plain' }))
+      try {
+        localStorage.setItem('streamforge.playback.subtitlesEnabled', 'true')
+        localStorage.setItem('streamforge.playback.subtitleTrack', `online:${result.fileId}`)
+      } catch {
+        // The selected track still works for this session.
+      }
+      setOnlineSubtitleTracks([{
+        label: `${result.language.toUpperCase()} · ${result.fileName}`,
+        preferenceKey: `online:${result.fileId}`,
+        src: url,
+        isDefault: true
+      }])
+      setShowOnlineSubtitles(false)
+    } catch (subtitleError) {
+      setOnlineSubtitleError(subtitleError instanceof Error ? subtitleError.message : 'Subtitle download failed.')
+    } finally {
+      setOnlineSubtitleLoading(false)
+    }
+  }, [playbackSettings.openSubtitlesApiKey])
   // Fetch stream URL - retry if the torrent isn't ready yet
   useEffect(() => {
     if (!infoHash) return
@@ -577,6 +718,7 @@ export default function Player() {
     if (!torrent || !streamURL) return
     addToHistory({
       movieId: torrent.infoHash,
+      ...playbackIdentity,
       slug: torrent.infoHash,
       title: playbackTitle,
       poster: playbackPoster,
@@ -585,12 +727,13 @@ export default function Player() {
       duration: initialHistoryEntryRef.current?.duration,
       magnetURI: streamMagnet
     })
-  }, [torrent?.infoHash, streamURL, streamMagnet, playbackTitle, playbackPoster, addToHistory])
+  }, [torrent?.infoHash, streamURL, streamMagnet, playbackTitle, playbackPoster, playbackIdentity, addToHistory])
 
   // Persist an exact recovery point frequently enough to survive abrupt exits.
   const handleTimeUpdate = useCallback(
     (currentTime: number, duration: number) => {
       currentPlaybackTimeRef.current = currentTime
+      setCurrentPlaybackTime(currentTime)
       if (!duration || !isFinite(duration)) return
       const now = Date.now()
 
@@ -603,6 +746,7 @@ export default function Player() {
       lastHistoryUpdate.current = now
       addToHistory({
         movieId: torrent.infoHash,
+        ...playbackIdentity,
         slug: torrent.infoHash,
         title: playbackTitle,
         poster: playbackPoster,
@@ -612,7 +756,7 @@ export default function Player() {
         magnetURI: streamMagnet
       })
     },
-    [infoHash, torrent, streamMagnet, playbackTitle, playbackPoster, addToHistory]
+    [infoHash, torrent, streamMagnet, playbackTitle, playbackPoster, playbackIdentity, addToHistory]
   )
 
   const handlePlaybackEnded = useCallback(() => {
@@ -620,6 +764,7 @@ export default function Player() {
     if (!torrent || !mediaInfo?.duration) return
     addToHistory({
       movieId: torrent.infoHash,
+      ...playbackIdentity,
       slug: torrent.infoHash,
       title: playbackTitle,
       poster: playbackPoster,
@@ -628,7 +773,123 @@ export default function Player() {
       duration: mediaInfo.duration,
       magnetURI: streamMagnet
     })
-  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster])
+    if (streamDisplayMetadata?.nextEpisode) {
+      setNextEpisodeError(null)
+      setUpNextCountdown(playbackSettings.autoplayNextEpisode ? 10 : 0)
+    }
+  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster, playbackIdentity, playbackSettings.autoplayNextEpisode, streamDisplayMetadata?.nextEpisode])
+
+  const prepareNextEpisode = useCallback(async (downloadOnly = false) => {
+    const next = streamDisplayMetadata?.nextEpisode
+    const seriesTitle = streamDisplayMetadata?.seriesTitle
+    const seriesId = streamDisplayMetadata?.seriesId
+    if (!next || !seriesTitle || !seriesId) return
+    setNextEpisodeError(null)
+    try {
+      const response = await window.torrentAPI.searchEpisodeTorrents({
+        seriesTitle,
+        seasonNumber: next.seasonNumber,
+        episodeNumber: next.episodeNumber,
+        episodeTitle: next.title,
+        imdbId: streamDisplayMetadata.seriesImdbId,
+        torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
+        torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
+      })
+      const ranked = rankSources(response.results, playbackSettings)
+      if (ranked.length === 0) throw new Error('No exact source is available for the next episode.')
+      const seasonEpisodes = await window.torrentAPI.getSeasonEpisodes(next.seasonId).catch(() => [])
+      if (downloadOnly) {
+        await addDownload(ranked[0].magnetURI)
+        const upcoming = seasonEpisodes.filter((episode) => (
+          episode.episodeNumber !== null
+          && episode.seasonNumber === next.seasonNumber
+          && episode.episodeNumber > next.episodeNumber
+        )).slice(0, Math.max(0, playbackSettings.smartDownloadCount - 1))
+        for (const episode of upcoming) {
+          if (episode.episodeNumber === null) continue
+          const upcomingResponse = await window.torrentAPI.searchEpisodeTorrents({
+            seriesTitle,
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+            episodeTitle: episode.title,
+            imdbId: streamDisplayMetadata.seriesImdbId,
+            torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
+            torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
+          })
+          const upcomingSources = rankSources(upcomingResponse.results, playbackSettings)
+          if (upcomingSources[0]) await addDownload(upcomingSources[0].magnetURI)
+        }
+        smartDownloadedEpisodeRef.current = next.id
+        return
+      }
+
+      const following = seasonEpisodes.find((episode) => (
+        episode.episodeNumber !== null
+        && episode.seasonNumber === next.seasonNumber
+        && episode.episodeNumber === next.episodeNumber + 1
+      ))
+      const hash = extractInfoHash(ranked[0].magnetURI)
+      if (!hash) throw new Error('The selected next-episode source is invalid.')
+      void addTorrent(ranked[0].magnetURI, {
+        seasonNumber: next.seasonNumber,
+        episodeNumber: next.episodeNumber
+      }, {
+        title: `${seriesTitle} — S${String(next.seasonNumber).padStart(2, '0')}E${String(next.episodeNumber).padStart(2, '0')} ${next.title}`,
+        posterUrl: next.stillUrl ?? streamDisplayMetadata.posterUrl,
+        contentKey: `episode:tvmaze:${next.id}`,
+        contentType: 'episode',
+        catalogId: String(next.id),
+        seriesId,
+        seriesTitle,
+        seriesImdbId: streamDisplayMetadata.seriesImdbId,
+        episodeId: next.id,
+        seasonNumber: next.seasonNumber,
+        episodeNumber: next.episodeNumber,
+        episodeTitle: next.title,
+        nextEpisode: following && following.episodeNumber !== null ? {
+          id: following.id,
+          seasonId: following.seasonId,
+          seasonNumber: following.seasonNumber,
+          episodeNumber: following.episodeNumber,
+          title: following.title,
+          stillUrl: following.stillUrl
+        } : undefined,
+        sourceCandidates: ranked,
+        sourceIndex: 0
+      }).catch((nextError) => setNextEpisodeError(nextError instanceof Error ? nextError.message : 'The next episode could not be started.'))
+      setUpNextCountdown(null)
+      navigate(`/player/${hash}`, { replace: true })
+    } catch (nextError) {
+      setNextEpisodeError(nextError instanceof Error ? nextError.message : 'The next episode could not be prepared.')
+      setUpNextCountdown(0)
+    }
+  }, [addDownload, addTorrent, navigate, playbackSettings, streamDisplayMetadata])
+
+  useEffect(() => {
+    if (upNextCountdown === null || upNextCountdown <= 0 || !playbackSettings.autoplayNextEpisode) return
+    const timer = window.setTimeout(() => {
+      if (upNextCountdown === 1) void prepareNextEpisode(false)
+      else setUpNextCountdown(upNextCountdown - 1)
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [playbackSettings.autoplayNextEpisode, prepareNextEpisode, upNextCountdown])
+
+  useEffect(() => {
+    const nextId = streamDisplayMetadata?.nextEpisode?.id
+    if (upNextCountdown === null || !nextId || playbackSettings.autoplayNextEpisode || !playbackSettings.smartDownloads) return
+    if (smartDownloadedEpisodeRef.current === nextId) return
+    void prepareNextEpisode(true)
+  }, [playbackSettings.autoplayNextEpisode, playbackSettings.smartDownloads, prepareNextEpisode, streamDisplayMetadata?.nextEpisode?.id, upNextCountdown])
+
+  const skippableChapter = useMemo(() => {
+    if (!playbackSettings.skipChapterMarkers) return null
+    return (mediaInfo?.chapters ?? []).find((chapter) => {
+      const title = chapter.title?.toLowerCase() ?? ''
+      return /intro|opening|credits|ending|outro/.test(title)
+        && currentPlaybackTime >= Math.max(0, chapter.start - 2)
+        && currentPlaybackTime < chapter.end - 1
+    }) ?? null
+  }, [currentPlaybackTime, mediaInfo?.chapters, playbackSettings.skipChapterMarkers])
 
   useEffect(() => {
     const persistRecoveryPoint = () => {
@@ -637,6 +898,7 @@ export default function Player() {
       if (!torrent || duration <= 0 || currentTime <= 0) return
       addToHistory({
         movieId: torrent.infoHash,
+        ...playbackIdentity,
         slug: torrent.infoHash,
         title: playbackTitle,
         poster: playbackPoster,
@@ -656,7 +918,7 @@ export default function Player() {
       window.removeEventListener('beforeunload', persistRecoveryPoint)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster])
+  }, [addToHistory, mediaInfo?.duration, streamMagnet, torrent, playbackTitle, playbackPoster, playbackIdentity])
 
   const restartFromBeginning = useCallback(() => {
     setResumeNoticeTime(null)
@@ -784,6 +1046,28 @@ export default function Player() {
           </p>
         </div>
 
+        <button
+          onClick={() => void handleQueueDownload()}
+          disabled={!streamMagnet || downloadState === 'queueing' || downloadState === 'queued' || downloadState === 'started'}
+          title={downloadState === 'queued' ? 'Download will start when you close this player' : 'Download this video'}
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.09] px-3 text-[10px] text-white/45 hover:bg-white/[0.05] hover:text-white/75 disabled:cursor-default disabled:opacity-55"
+        >
+          <Download className="h-3.5 w-3.5" />
+          {downloadState === 'queueing' ? 'Queuing...' : downloadState === 'queued' ? 'Queued' : downloadState === 'started' ? 'Downloading' : downloadState === 'error' ? 'Retry download' : 'Download'}
+        </button>
+
+        <div className="relative">
+          <button onClick={() => void searchOnlineSubtitleTracks()} className="flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.09] px-3 text-[10px] text-white/45 hover:bg-white/[0.05] hover:text-white/75"><Captions className="h-3.5 w-3.5" /> Find subtitles</button>
+          {showOnlineSubtitles && (
+            <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-xl border border-white/[0.1] bg-[#15181a] shadow-2xl">
+              <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3"><div><p className="text-[10px] font-semibold text-white/65">Online subtitles</p><p className="mt-1 text-[8px] text-white/25">OpenSubtitles · {playbackSettings.preferredSubtitleLanguage.toUpperCase()}</p></div><button onClick={() => setShowOnlineSubtitles(false)} className="text-[10px] text-white/30 hover:text-white/70">Close</button></div>
+              {onlineSubtitleLoading && <div className="px-4 py-6 text-center text-[10px] text-white/35">Loading subtitles…</div>}
+              {!onlineSubtitleLoading && onlineSubtitleError && <div className="px-4 py-4 text-[9px] text-amber-200/65">{onlineSubtitleError}</div>}
+              {!onlineSubtitleLoading && onlineSubtitleResults.length > 0 && <div className="max-h-72 divide-y divide-white/[0.05] overflow-y-auto">{onlineSubtitleResults.map((result) => <button key={`${result.id}:${result.fileId}`} onClick={() => void addOnlineSubtitleTrack(result)} className="block w-full px-4 py-3 text-left hover:bg-white/[0.04]"><p className="truncate text-[10px] text-white/62">{result.fileName}</p><p className="mt-1 text-[8px] text-white/25">{result.language.toUpperCase()} · {result.downloadCount.toLocaleString()} downloads{result.release ? ` · ${result.release}` : ''}</p></button>)}</div>}
+            </div>
+          )}
+        </div>
+
         {/* File Selector */}
         {(videoFiles.length > 1 || (torrent?.requiresFileSelection && !manualFileSelectionComplete)) && (
           <div className="relative">
@@ -827,7 +1111,7 @@ export default function Player() {
       </div>
 
       {/* Video Player */}
-      <div className="px-4">
+      <div className="relative px-4">
         {torrent?.requiresFileSelection && !manualFileSelectionComplete && !streamURL && (
           <div className="mb-3 rounded-lg border border-amber-300/15 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/70" role="alert">
             {torrent.fileSelectionMessage || 'Choose the requested episode file to continue.'}
@@ -862,10 +1146,26 @@ export default function Player() {
             onTimeUpdate={handleTimeUpdate}
             onEnded={handlePlaybackEnded}
             onError={handleVideoError}
-            onPlaybackStateChange={(state) => setPhase(state)}
+            onPlaybackStateChange={handlePlaybackStateChange}
             onDiagnosticsChange={setVideoDiagnostics}
             subtitleTracks={subtitleTracks}
           />
+          {skippableChapter && (
+            <button
+              onClick={() => void restartPlaybackAt(skippableChapter.end, selectedAudioTrackIndex)}
+              className="absolute bottom-7 right-8 z-20 flex items-center gap-2 rounded-lg border border-white/20 bg-black/75 px-4 py-2 text-[11px] font-semibold text-white shadow-xl backdrop-blur hover:bg-white hover:text-black"
+            >
+              Skip {/(credits|ending|outro)/i.test(skippableChapter.title ?? '') ? 'credits' : 'intro'} <SkipForward className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {upNextCountdown !== null && streamDisplayMetadata?.nextEpisode && (
+            <div className="absolute inset-x-8 bottom-7 z-20 flex items-center gap-4 rounded-xl border border-white/15 bg-[#111416]/95 p-4 shadow-2xl backdrop-blur">
+              {streamDisplayMetadata.nextEpisode.stillUrl && <img src={streamDisplayMetadata.nextEpisode.stillUrl} alt="" className="h-16 w-28 rounded-lg object-cover" />}
+              <div className="min-w-0 flex-1"><p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-200/60">Up Next</p><p className="mt-1 truncate text-[12px] font-semibold text-white/80">S{streamDisplayMetadata.nextEpisode.seasonNumber} E{streamDisplayMetadata.nextEpisode.episodeNumber} · {streamDisplayMetadata.nextEpisode.title}</p>{nextEpisodeError ? <p className="mt-1 text-[9px] text-red-200/65">{nextEpisodeError}</p> : playbackSettings.autoplayNextEpisode && upNextCountdown > 0 ? <p className="mt-1 text-[9px] text-white/32">Playing in {upNextCountdown} seconds</p> : null}</div>
+              <button onClick={() => setUpNextCountdown(null)} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] text-white/45 hover:bg-white/[0.06]">Cancel</button>
+              <button onClick={() => void prepareNextEpisode(false)} className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-[10px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Play now</button>
+            </div>
+          )}
           </>
         )}
       </div>

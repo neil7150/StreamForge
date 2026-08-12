@@ -3,6 +3,9 @@ import type { TorrentSearchResult } from './provider-policy'
 export interface MovieTorrentSearchRequest {
   title: string
   year?: number
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
 }
 
 function normalizeTitle(value: string): string {

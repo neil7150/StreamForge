@@ -3,6 +3,9 @@ export interface EpisodeTorrentSearchRequest {
   seasonNumber: number
   episodeNumber: number
   episodeTitle?: string
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
 }
 
 function normalizeTitle(value: string): string {

@@ -11,6 +11,8 @@ export function registerCatalogHandlers(
     client.searchSeries(requireSearchQuery(query))
   ))
 
+  ipcMain.handle('catalog:popular-series', async () => client.getPopularSeries())
+
   ipcMain.handle('catalog:get-series', async (_, seriesId: number) => (
     client.getSeries(requireCatalogId(seriesId, 'series ID'))
   ))
@@ -26,6 +28,8 @@ export function registerCatalogHandlers(
   ipcMain.handle('catalog:search-movies', async (_, query: string) => (
     movieClient.searchMovies(requireSearchQuery(query))
   ))
+
+  ipcMain.handle('catalog:popular-movies', async () => movieClient.getPopularMovies())
 
   ipcMain.handle('catalog:get-movie', async (_, movieId: string) => (
     movieClient.getMovie(requireMovieCatalogId(movieId))

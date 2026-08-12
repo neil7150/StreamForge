@@ -172,6 +172,13 @@ export interface ProbeResult {
   needsVideoTranscode: boolean
   needsAudioTranscode: boolean
   needsTranscode: boolean
+  chapters?: MediaChapter[]
+}
+
+export interface MediaChapter {
+  start: number
+  end: number
+  title: string | null
 }
 
 // ─── Public API ──────────────────────────────────────────────────────
@@ -189,6 +196,7 @@ export async function probeFile(input: string): Promise<ProbeResult> {
       '-print_format', 'json',
       '-show_streams',
       '-show_format',
+      '-show_chapters',
       input
     ]
 
@@ -233,6 +241,17 @@ export async function probeFile(input: string): Promise<ProbeResult> {
         const data = JSON.parse(stdout)
         const streams = data.streams || []
         const format = data.format || {}
+        const chapters: MediaChapter[] = Array.isArray(data.chapters)
+          ? data.chapters.flatMap((chapter: Record<string, unknown>) => {
+            const start = Number(chapter.start_time)
+            const end = Number(chapter.end_time)
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return []
+            const tags = chapter.tags && typeof chapter.tags === 'object'
+              ? chapter.tags as Record<string, unknown>
+              : {}
+            return [{ start, end, title: typeof tags.title === 'string' ? tags.title : null }]
+          })
+          : []
 
         let videoCodec: string | null = null
         let width = 0
@@ -289,7 +308,8 @@ export async function probeFile(input: string): Promise<ProbeResult> {
           height,
           needsVideoTranscode,
           needsAudioTranscode,
-          needsTranscode: needsVideoTranscode || needsAudioTranscode
+          needsTranscode: needsVideoTranscode || needsAudioTranscode,
+          chapters
         }
 
         console.log(

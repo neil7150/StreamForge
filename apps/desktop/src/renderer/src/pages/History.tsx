@@ -70,14 +70,14 @@ export default function History() {
             {(tab === 'recent' ? history : watchlist).map((entry) => {
               const recent = tab === 'recent'
               const magnet = entry.magnetURI
-              const displayMetadata = { title: entry.title, posterUrl: entry.poster || null }
+              const displayMetadata: PlaybackDisplayMetadata = { title: entry.title, posterUrl: entry.poster || null, ...('contentKey' in entry ? { contentKey: entry.contentKey, contentType: entry.contentType, catalogId: entry.catalogId, seriesId: entry.seriesId, seriesTitle: entry.seriesTitle, episodeId: entry.episodeId, seasonNumber: entry.seasonNumber, episodeNumber: entry.episodeNumber, episodeTitle: entry.episodeTitle } : {}) }
               return (
-                <article key={entry.movieId} className="group min-w-0">
+                <article key={('contentKey' in entry && entry.contentKey) || entry.movieId} className="group min-w-0">
                   <button onClick={() => recent ? startMagnet(magnet, entry.movieId, displayMetadata) : magnet && startMagnet(magnet, undefined, displayMetadata)} disabled={!magnet && (!recent || !streams.has(entry.movieId))} className="block w-full text-left disabled:cursor-default">
                     <StreamArtwork title={entry.title} imageUrl={entry.poster} subtitle={recent ? timeAgo((entry as typeof history[number]).watchedAt) : ('year' in entry && entry.year ? String(entry.year) : 'Saved')} progress={recent ? (entry as typeof history[number]).progress : 0} showPlay={Boolean(magnet) || (recent && streams.has(entry.movieId))} className="aspect-[1.5/1] w-full rounded-lg transition-colors group-hover:border-white/15" />
                   </button>
                   <div className="mt-2 flex items-start gap-2"><div className="min-w-0 flex-1"><h2 className="truncate text-[11px] font-medium text-white/60 group-hover:text-white/80">{entry.title}</h2><p className="mt-1 text-[9px] text-white/24">{recent ? Math.round((entry as typeof history[number]).progress * 100) + '% watched' : ('year' in entry && entry.year ? entry.year : 'Saved')}</p></div>
-                    {recent ? <button onClick={() => removeFromHistory(entry.movieId)} className="opacity-0 text-white/18 hover:text-red-300 group-hover:opacity-100"><Trash2 className="h-3.5 w-3.5" /></button> : <div className="flex gap-2 opacity-0 group-hover:opacity-100">{magnet && <button onClick={() => startMagnet(magnet, undefined, displayMetadata)} className="text-teal-300/70"><Play className="h-3 w-3 fill-current" /></button>}<button onClick={() => removeFromWatchlist(entry.movieId)} className="text-white/18 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button></div>}
+                    {recent ? <button onClick={() => removeFromHistory(('contentKey' in entry && entry.contentKey) || entry.movieId)} className="opacity-0 text-white/18 hover:text-red-300 group-hover:opacity-100"><Trash2 className="h-3.5 w-3.5" /></button> : <div className="flex gap-2 opacity-0 group-hover:opacity-100">{magnet && <button onClick={() => startMagnet(magnet, undefined, displayMetadata)} className="text-teal-300/70"><Play className="h-3 w-3 fill-current" /></button>}<button onClick={() => removeFromWatchlist(entry.movieId)} className="text-white/18 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button></div>}
                   </div>
                 </article>
               )

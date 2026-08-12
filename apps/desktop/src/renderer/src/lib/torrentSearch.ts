@@ -4,7 +4,7 @@
  * report partial provider outages instead of silently showing no results.
  */
 
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
 
 export interface TorrentSearchResult {
   id: string

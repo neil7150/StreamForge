@@ -12,7 +12,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-isolation=none tests/stream-policy.test.ts tests/validation.test.ts tests/provider-policy.test.ts tests/provider-resilience.test.ts tests/peer-transport-policy.test.ts tests/playback-diagnostics.test.ts tests/playback-resume.test.ts tests/history-policy.test.ts tests/tvmaze-client.test.ts tests/yts-movie-client.test.ts tests/movie-catalog-client.test.ts tests/series-detail-policy.test.ts tests/movie-detail-policy.test.ts tests/episode-search.test.ts tests/episode-file-policy.test.ts tests/movie-search.test.ts",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-isolation=none tests/automatic-fallback-policy.test.ts tests/provider-endpoints.test.ts tests/source-selection-policy.test.ts tests/stream-policy.test.ts tests/validation.test.ts tests/provider-policy.test.ts tests/provider-resilience.test.ts tests/peer-transport-policy.test.ts tests/playback-diagnostics.test.ts tests/playback-resume.test.ts tests/history-policy.test.ts tests/tvmaze-client.test.ts tests/yts-movie-client.test.ts tests/movie-catalog-client.test.ts tests/series-detail-policy.test.ts tests/movie-detail-policy.test.ts tests/episode-search.test.ts tests/episode-file-policy.test.ts tests/movie-search.test.ts",
     "test:compatibility": "node tests/run-media-compatibility.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "build:verify": "npm run test && npm run test:compatibility && npm run typecheck && npm run build:unpack && npm run verify:package",

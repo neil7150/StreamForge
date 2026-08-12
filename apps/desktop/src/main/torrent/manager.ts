@@ -135,6 +135,11 @@ export interface TorrentInfo {
   fileSelectionMessage: string | null
 }
 
+export interface QueuedDownloadResult {
+  infoHash: string
+  queued: boolean
+}
+
 export interface TorrentProgress {
   infoHash: string
   progress: number
@@ -199,6 +204,8 @@ export class TorrentManager extends EventEmitter {
   private intentionallyRemoved: Set<string> = new Set()
   /** Mode requested while a torrent is still waiting for metadata. */
   private pendingModes: WeakMap<ManagedTorrent, TorrentMode> = new WeakMap()
+  /** Downloads requested for a torrent that is currently reserved by the player. */
+  private pendingDownloadMagnets: Map<string, string> = new Map()
   /** Requested episode while a potentially multi-file torrent is waiting for metadata. */
   private pendingEpisodeFiles: WeakMap<ManagedTorrent, PreferredEpisodeFile> = new WeakMap()
   /** Metadata deadlines keyed by info hash so removal can cancel them. */
@@ -332,6 +339,14 @@ export class TorrentManager extends EventEmitter {
 
       console.log(`[TorrentManager] Stream cleaned up: ${infoHash}`)
     }
+
+    const queuedMagnet = this.pendingDownloadMagnets.get(infoHash.toLowerCase())
+    if (queuedMagnet) {
+      this.pendingDownloadMagnets.delete(infoHash.toLowerCase())
+      void this.addDownload(queuedMagnet).catch((error) => {
+        console.error(`[TorrentManager] Failed to start queued download ${infoHash}:`, error)
+      })
+    }
   }
 
   /**
@@ -368,6 +383,30 @@ export class TorrentManager extends EventEmitter {
    */
   addDownload(magnetURI: string): Promise<TorrentInfo> {
     return this._addTorrent(magnetURI, 'download')
+  }
+
+  /**
+   * Start a persistent download, or queue it until an active stream using the
+   * same torrent releases WebTorrent's single-torrent reservation.
+   */
+  async queueDownload(magnetURI: string, activeStreamInfoHash?: string): Promise<QueuedDownloadResult> {
+    const hashMatch = magnetURI.match(/btih:([a-fA-F0-9]{40})/i)
+      || magnetURI.match(/btih:([a-zA-Z2-7]{32})/i)
+    const requestedHash = activeStreamInfoHash?.toLowerCase() ?? hashMatch?.[1]?.toLowerCase()
+    const activeStream = requestedHash
+      ? this.client.torrents.find((torrent) => {
+          if (torrent.infoHash.toLowerCase() !== requestedHash) return false
+          return (this.torrentStates.get(torrent.infoHash)?.mode ?? this.pendingModes.get(torrent)) === 'stream'
+        })
+      : undefined
+
+    if (requestedHash && activeStream) {
+      this.pendingDownloadMagnets.set(requestedHash, magnetURI)
+      return { infoHash: activeStream.infoHash, queued: true }
+    }
+
+    const info = await this.addDownload(magnetURI)
+    return { infoHash: info.infoHash, queued: false }
   }
 
   /**
@@ -441,6 +480,7 @@ export class TorrentManager extends EventEmitter {
    * For downloads: destroys torrent but keeps files. Removes from manifest.
    */
   async removeTorrent(infoHash: string): Promise<void> {
+    this.pendingDownloadMagnets.delete(infoHash.toLowerCase())
     this.suppressRemovalEvents(infoHash)
     this.clearMetadataDeadline(infoHash)
     const state = this.torrentStates.get(infoHash)
@@ -734,6 +774,7 @@ export class TorrentManager extends EventEmitter {
       clearTimeout(timer)
     }
     this.metadataDeadlines.clear()
+    this.pendingDownloadMagnets.clear()
 
     return new Promise((resolve) => {
       this.client.destroy((err) => {

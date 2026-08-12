@@ -3,6 +3,7 @@ import { requireEpisodeSearchRequest, requireMovieSearchRequest, requireSearchQu
 import { searchTorrentProviders } from '../search/provider-search'
 import { searchEpisodeTorrentProviders } from '../search/episode-search'
 import { searchMovieTorrentProviders } from '../search/movie-search'
+import { downloadOnlineSubtitle, searchOnlineSubtitles, type OnlineSubtitleSearchRequest } from '../metadata/opensubtitles-client'
 
 export function registerSearchHandlers(): void {
   ipcMain.handle('search:torrents', async (_, query: string) => {
@@ -16,5 +17,13 @@ export function registerSearchHandlers(): void {
 
   ipcMain.handle('search:movie-torrents', async (_, request: unknown) => (
     searchMovieTorrentProviders(requireMovieSearchRequest(request))
+  ))
+
+  ipcMain.handle('subtitles:search', async (_, request: OnlineSubtitleSearchRequest) => (
+    searchOnlineSubtitles(request)
+  ))
+
+  ipcMain.handle('subtitles:download', async (_, apiKey: string, fileId: number) => (
+    downloadOnlineSubtitle(apiKey, fileId)
   ))
 }

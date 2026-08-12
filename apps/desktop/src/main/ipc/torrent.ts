@@ -56,6 +56,19 @@ export function setupTorrentIPC(
     }
   })
 
+  /** Queue a persistent download without interrupting an identical active stream. */
+  ipcMain.handle('torrent:queue-download', async (_event, magnetURI: string, activeStreamInfoHash?: string) => {
+    try {
+      return await torrentManager.queueDownload(
+        requireMagnetURI(magnetURI),
+        activeStreamInfoHash === undefined ? undefined : requireInfoHash(activeStreamInfoHash)
+      )
+    } catch (error) {
+      console.error('[IPC torrent:queue-download] Error:', (error as Error).message)
+      throw error
+    }
+  })
+
   /** Remove and destroy a torrent by info hash. */
   ipcMain.handle('torrent:remove', async (_event, infoHash: string) => {
     try {

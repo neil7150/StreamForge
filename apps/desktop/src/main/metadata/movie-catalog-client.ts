@@ -32,7 +32,7 @@ interface CinemetaClientOptions {
 }
 
 interface MovieCatalogClientOptions {
-  primary?: Pick<CinemetaMovieClient, 'searchMovies' | 'getMovie'>
+  primary?: Pick<CinemetaMovieClient, 'searchMovies' | 'getMovie' | 'getPopularMovies'>
   fallback?: Pick<YTSMovieClient, 'searchMovies' | 'getMovie'>
   now?: () => number
 }
@@ -166,6 +166,17 @@ export class CinemetaMovieClient {
     })
   }
 
+  async getPopularMovies(): Promise<MovieSummary[]> {
+    return this.cached('cinemeta-popular', SEARCH_CACHE_TTL_MS, async () => {
+      const payload = asRecord(await this.request('/catalog/movie/top.json'))
+      if (!Array.isArray(payload?.metas)) throw new Error('Primary movie catalog returned an invalid browse response')
+      return payload.metas.slice(0, 30).flatMap((value) => {
+        const movie = normalizeCinemetaMovie(value)
+        return movie ? [toSummary(movie)] : []
+      })
+    })
+  }
+
   async getMovie(imdbId: string): Promise<MovieDetails> {
     const normalizedId = imdbId.toLowerCase()
     if (!IMDB_ID_PATTERN.test(normalizedId)) throw new Error('Invalid primary movie catalog ID')
@@ -216,7 +227,7 @@ export class CinemetaMovieClient {
 }
 
 export class MovieCatalogClient {
-  private readonly primary: Pick<CinemetaMovieClient, 'searchMovies' | 'getMovie'>
+  private readonly primary: Pick<CinemetaMovieClient, 'searchMovies' | 'getMovie' | 'getPopularMovies'>
   private readonly fallback: Pick<YTSMovieClient, 'searchMovies' | 'getMovie'>
   private readonly now: () => number
   private readonly staleSearches = new Map<string, CacheEntry<MovieSummary[]>>()
@@ -255,6 +266,15 @@ export class MovieCatalogClient {
       throw primaryError instanceof Error
         ? new Error(`Movie catalogs are unavailable: ${primaryError.message}`)
         : new Error('Movie catalogs are unavailable')
+    }
+  }
+
+  async getPopularMovies(): Promise<MovieSummary[]> {
+    try {
+      return await this.primary.getPopularMovies()
+    } catch (error) {
+      console.warn('[MovieCatalog] Popular movie catalog failed:', error)
+      return []
     }
   }
 

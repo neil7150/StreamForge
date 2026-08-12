@@ -1,10 +1,33 @@
 import { create } from 'zustand'
-import type { PreferredEpisodeFile, TorrentInfo, TorrentProgress } from '../../../preload/index.d'
+import type { PreferredEpisodeFile, TorrentInfo, TorrentProgress, TorrentSearchResult } from '../../../preload/index.d'
 import { extractInfoHash } from '../lib/utils'
+import { usePlaybackSettingsStore } from './playbackSettingsStore'
+
+export interface NextEpisodeMetadata {
+  id: number
+  seasonId: number
+  seasonNumber: number
+  episodeNumber: number
+  title: string
+  stillUrl: string | null
+}
 
 export interface PlaybackDisplayMetadata {
   title: string
   posterUrl: string | null
+  contentKey?: string
+  contentType?: 'movie' | 'episode'
+  catalogId?: string
+  seriesId?: number
+  seriesTitle?: string
+  seriesImdbId?: string
+  episodeId?: number
+  seasonNumber?: number
+  episodeNumber?: number
+  episodeTitle?: string
+  nextEpisode?: NextEpisodeMetadata
+  sourceCandidates?: TorrentSearchResult[]
+  sourceIndex?: number
 }
 
 interface TorrentState {
@@ -155,12 +178,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   retryStream: async (infoHash: string) => {
-    const magnetURI = get().streamMagnets.get(infoHash.toLowerCase())
-    const preferredEpisode = get().streamPreferredEpisodes.get(infoHash.toLowerCase())
-    const displayMetadata = get().streamDisplayMetadata.get(infoHash.toLowerCase())
+    const key = infoHash.toLowerCase()
+    const magnetURI = get().streamMagnets.get(key)
+    const preferredEpisode = get().streamPreferredEpisodes.get(key)
+    const displayMetadata = get().streamDisplayMetadata.get(key)
     if (!magnetURI) throw new Error('The original magnet link is no longer available. Choose the source again.')
+    const candidates = displayMetadata?.sourceCandidates ?? []
+    const currentIndex = displayMetadata?.sourceIndex ?? candidates.findIndex((source) => source.magnetURI === magnetURI)
+    const useFallback = usePlaybackSettingsStore.getState().automaticSourceFallback
+      && currentIndex >= 0
+      && currentIndex + 1 < candidates.length
+    const nextSource = useFallback ? candidates[currentIndex + 1] : null
+    const nextMetadata = displayMetadata && nextSource
+      ? { ...displayMetadata, sourceIndex: currentIndex + 1 }
+      : displayMetadata
     await get().cleanupStream(infoHash)
-    return get().addTorrent(magnetURI, preferredEpisode, displayMetadata)
+    return get().addTorrent(nextSource?.magnetURI ?? magnetURI, preferredEpisode, nextMetadata)
   },
   // ─── Downloads (persistent) ──────────────────────────────────────
 

@@ -1,3 +1,5 @@
+import { fetchJSONWithFailover } from '../search/provider-endpoints.ts'
+
 type UnknownRecord = Record<string, unknown>
 
 export interface MovieSummary {
@@ -29,7 +31,7 @@ interface YTSMovieClientOptions {
   now?: () => number
 }
 
-const API_BASE_URL = 'https://yts.mx/api/v2'
+const API_BASE_URLS = ['https://yts.bz/api/v2', 'https://yts.gg/api/v2', 'https://yts.lt/api/v2', 'https://yts.am/api/v2', 'https://yts.ag/api/v2']
 const REQUEST_TIMEOUT_MS = 8_000
 const SEARCH_CACHE_TTL_MS = 10 * 60_000
 const DETAILS_CACHE_TTL_MS = 60 * 60_000
@@ -117,6 +119,7 @@ export class YTSMovieClient {
   private readonly now: () => number
   private readonly cache = new Map<string, CacheEntry<unknown>>()
   private readonly inFlight = new Map<string, Promise<unknown>>()
+  private preferredBaseURL = API_BASE_URLS[0]
 
   constructor(options: YTSMovieClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch
@@ -167,23 +170,16 @@ export class YTSMovieClient {
   }
 
   private async request(path: string): Promise<unknown> {
-    let response: Response
     try {
-      response = await this.fetchImpl(`${API_BASE_URL}${path}`, {
-        headers: { Accept: 'application/json', 'User-Agent': 'StreamForge/0.1 (movie metadata client)' },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      })
+      const endpoints = [this.preferredBaseURL, ...API_BASE_URLS.filter((url) => url !== this.preferredBaseURL)]
+      const result = await fetchJSONWithFailover(endpoints, path, this.fetchImpl, REQUEST_TIMEOUT_MS)
+      this.preferredBaseURL = result.endpoint
+      return result.payload
     } catch (error) {
       if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
         throw new Error('Movie catalog request timed out')
       }
       throw new Error('Movie catalog could not be reached')
-    }
-    if (!response.ok) throw new Error(`Movie catalog request failed with HTTP ${response.status}`)
-    try {
-      return await response.json()
-    } catch {
-      throw new Error('Movie catalog returned invalid JSON')
     }
   }
 }

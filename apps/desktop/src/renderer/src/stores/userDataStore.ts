@@ -8,6 +8,16 @@ import { preserveHistoryMetadata } from '../lib/history-policy'
 
 export interface WatchHistoryEntry {
   movieId: string
+  /** Stable catalog identity. Older entries fall back to movieId (torrent hash). */
+  contentKey?: string
+  contentType?: 'movie' | 'episode'
+  catalogId?: string
+  seriesId?: number
+  seriesTitle?: string
+  episodeId?: number
+  seasonNumber?: number
+  episodeNumber?: number
+  episodeTitle?: string
   slug: string
   title: string
   poster: string
@@ -40,7 +50,7 @@ interface UserDataState {
 
   // History
   addToHistory: (entry: Omit<WatchHistoryEntry, 'watchedAt'>) => void
-  removeFromHistory: (movieId: string) => void
+  removeFromHistory: (identity: string) => void
   clearHistory: () => void
 
   // Persistence
@@ -87,19 +97,22 @@ export const useUserDataStore = create<UserDataState>((set, get) => ({
 
   addToHistory: (entry) => {
     set((state) => {
-      // Remove existing entry for same movie (will re-add at top)
-      const existing = state.history.find((item) => item.movieId === entry.movieId)
+      const identity = entry.contentKey || entry.movieId
+      // Catalog identity keeps progress stable when a different torrent source is selected.
+      const existing = state.history.find((item) => (item.contentKey || item.movieId) === identity)
       const preserved = preserveHistoryMetadata(existing, entry)
-      const filtered = state.history.filter((e) => e.movieId !== entry.movieId)
+      const filtered = state.history.filter((item) => (item.contentKey || item.movieId) !== identity)
       const updated = [{ ...preserved, watchedAt: Date.now() }, ...filtered].slice(0, 50) // keep last 50
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updated))
       return { history: updated }
     })
   },
 
-  removeFromHistory: (movieId) => {
+  removeFromHistory: (identity) => {
     set((state) => {
-      const updated = state.history.filter((e) => e.movieId !== movieId)
+      const updated = state.history.filter((item) => (
+        item.movieId !== identity && item.contentKey !== identity
+      ))
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updated))
       return { history: updated }
     })

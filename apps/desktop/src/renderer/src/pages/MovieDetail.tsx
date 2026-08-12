@@ -3,7 +3,9 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CalendarDays, Clock3, Film, Loader2, Play, Star, Users, WifiOff } from 'lucide-react'
 import type { MovieDetails, MovieSummary, TorrentSearchResponse, TorrentSearchResult } from '../../../preload/index.d'
 import { parseMovieCatalogId } from '../lib/movie-detail-policy'
+import { rankSources, sortSourcesBySeeders } from '../lib/source-selection-policy'
 import { extractInfoHash } from '../lib/utils'
+import { usePlaybackSettingsStore } from '../stores/playbackSettingsStore'
 import { useTorrentStore } from '../stores/torrentStore'
 
 interface MovieLocationState {
@@ -62,6 +64,9 @@ export default function MovieDetail() {
   const sourceRequestRef = useRef(0)
   const addTorrent = useTorrentStore((store) => store.addTorrent)
   const clearTorrentError = useTorrentStore((store) => store.clearError)
+  const playbackSettings = usePlaybackSettingsStore()
+  const rankedSources = useMemo(() => rankSources(sources, playbackSettings), [playbackSettings, sources])
+  const displayedSources = useMemo(() => sortSourcesBySeeders(sources), [sources])
 
   const goBack = useCallback(() => {
     navigate('/search', { state: state?.fromQuery ? { query: state.fromQuery } : undefined })
@@ -74,7 +79,13 @@ export default function MovieDetail() {
     setSourcesError(null)
     setNotice(null)
     try {
-      const response = await window.torrentAPI.searchMovieTorrents({ title: details.title, year: details.year ?? undefined })
+      const response = await window.torrentAPI.searchMovieTorrents({
+        title: details.title,
+        year: details.year ?? undefined,
+        imdbId: details.imdbId ?? undefined,
+        torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
+        torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
+      })
       if (requestId !== sourceRequestRef.current) return
       setSources(response.results)
       setNotice(providerNotice(response))
@@ -89,7 +100,7 @@ export default function MovieDetail() {
     } finally {
       if (requestId === sourceRequestRef.current) setSourcesLoading(false)
     }
-  }, [])
+  }, [playbackSettings.torznabApiKey, playbackSettings.torznabEnabled, playbackSettings.torznabUrl])
 
   const loadMovie = useCallback(async () => {
     const requestId = ++pageRequestRef.current
@@ -121,10 +132,15 @@ export default function MovieDetail() {
     clearTorrentError()
     void addTorrent(source.magnetURI, undefined, {
       title: movie.title,
-      posterUrl: movie.posterUrl ?? movie.backdropUrl
+      posterUrl: movie.posterUrl ?? movie.backdropUrl,
+      contentKey: `movie:${movie.id}`,
+      contentType: 'movie',
+      catalogId: movie.id,
+      sourceCandidates: rankedSources,
+      sourceIndex: rankedSources.findIndex((candidate) => candidate.id === source.id)
     }).catch(() => {})
     navigate('/player/' + hash)
-  }, [addTorrent, clearTorrentError, movie, navigate])
+  }, [addTorrent, clearTorrentError, movie, navigate, rankedSources])
 
   if (pageLoading) return <div className="flex h-full flex-col items-center justify-center" role="status"><Loader2 className="h-6 w-6 animate-spin text-teal-300" /><p className="mt-3 text-[11px] text-white/35">Loading {state?.movie?.title || 'movie'}...</p></div>
   if (pageError || !movie) return <div className="flex h-full flex-col items-center justify-center px-8 text-center" role="alert"><WifiOff className="h-7 w-7 text-white/16" /><p className="mt-4 text-[12px] text-white/55">{pageError || 'The movie could not be loaded.'}</p><div className="mt-5 flex gap-2"><button onClick={goBack} className="rounded-lg border border-white/[0.09] px-3 py-2 text-[10px] text-white/55">Back to search</button>{movieId !== null && <button onClick={() => void loadMovie()} className="rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-[#17191b]">Try again</button>}</div></div>
@@ -150,11 +166,11 @@ export default function MovieDetail() {
       </header>
 
       <main className="mx-auto max-w-[1160px] px-10 pb-14 pt-8">
-        <div className="mb-4 flex items-end justify-between border-b border-white/[0.06] pb-3"><div><h2 className="text-[15px] font-semibold text-white/78">Available torrents</h2><p className="mt-1 text-[9px] text-white/27">Exact title and release-year matches from all configured providers.</p></div>{!sourcesLoading && sources.length > 0 && <span className="text-[9px] text-white/25">{sources.length} sources</span>}</div>
+        <div className="mb-4 flex items-end justify-between border-b border-white/[0.06] pb-3"><div><h2 className="text-[15px] font-semibold text-white/78">Available torrents</h2><p className="mt-1 text-[9px] text-white/27">Ranked by source health, quality, and your playback settings.</p></div>{!sourcesLoading && rankedSources.length > 0 && <div className="flex items-center gap-3"><span className="text-[9px] text-white/25">{rankedSources.length} sources</span><button onClick={() => streamSource(rankedSources[0])} className="flex h-9 items-center gap-2 rounded-lg bg-teal-200 px-4 text-[10px] font-semibold text-[#10201f] hover:bg-teal-100"><Play className="h-3.5 w-3.5 fill-current" /> Play Best</button></div>}</div>
         {sourcesLoading && <div className="flex min-h-44 items-center justify-center" role="status"><Loader2 className="h-5 w-5 animate-spin text-teal-300" /><span className="ml-3 text-[10px] text-white/30">Checking movie sources...</span></div>}
         {!sourcesLoading && notice && <p className="mb-3 text-[9px] text-amber-200/55">{notice}</p>}
         {!sourcesLoading && sourcesError && <div className="rounded-xl border border-white/[0.07] px-5 py-8 text-center" role="alert"><p className="text-[11px] text-white/45">{sourcesError}</p><button onClick={() => void loadSources(movie)} className="mt-4 rounded-lg border border-white/[0.09] px-3 py-2 text-[10px] text-white/55">Try again</button></div>}
-        {!sourcesLoading && sources.length > 0 && <div className="divide-y divide-white/[0.055] border-y border-white/[0.06]">{sources.map((source) => <article key={source.id} className="flex min-w-0 items-center gap-5 py-4"><div className="min-w-0 flex-1"><h3 className="truncate text-[11px] font-medium text-white/68" title={source.name}>{source.name}</h3><div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-white/28"><span className="flex items-center gap-1 text-teal-200/58"><Users className="h-3 w-3" />{source.seeders} seeds</span><span>{source.size}</span><span>{quality(source.name)}</span><span>{compatibility(source.name)}</span><span>{source.provider}</span></div></div><button onClick={() => streamSource(source)} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 text-[9px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Stream</button></article>)}</div>}
+        {!sourcesLoading && displayedSources.length > 0 && <div className="divide-y divide-white/[0.055] border-y border-white/[0.06]">{displayedSources.map((source, index) => <article key={source.id} className="flex min-w-0 items-center gap-5 py-4"><span className="w-5 text-center text-[9px] text-white/18">{index + 1}</span><div className="min-w-0 flex-1"><h3 className="truncate text-[11px] font-medium text-white/68" title={source.name}>{source.name}</h3><div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-white/28"><span className="flex items-center gap-1 text-teal-200/58"><Users className="h-3 w-3" />{source.seeders} seeds</span><span>{source.size}</span><span>{quality(source.name)}</span><span>{compatibility(source.name)}</span><span>{source.provider}</span></div></div><button onClick={() => streamSource(source)} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 text-[9px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Stream</button></article>)}</div>}
       </main>
     </div>
   )

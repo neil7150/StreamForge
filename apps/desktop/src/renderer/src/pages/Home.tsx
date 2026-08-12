@@ -101,9 +101,9 @@ export default function Home() {
           {recentHistory.length > 0 ? (
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
               {recentHistory.map((entry) => (
-                <article key={entry.movieId} className="group relative min-w-0">
+                <article key={entry.contentKey || entry.movieId} className="group relative min-w-0">
                   <button
-                    onClick={() => resume(entry.movieId, entry.magnetURI, { title: entry.title, posterUrl: entry.poster || null })}
+                    onClick={() => resume(entry.movieId, entry.magnetURI, { title: entry.title, posterUrl: entry.poster || null, contentKey: entry.contentKey, contentType: entry.contentType, catalogId: entry.catalogId, seriesId: entry.seriesId, seriesTitle: entry.seriesTitle, episodeId: entry.episodeId, seasonNumber: entry.seasonNumber, episodeNumber: entry.episodeNumber, episodeTitle: entry.episodeTitle })}
                     disabled={!entry.magnetURI && !streams.has(entry.movieId)}
                     className="w-full min-w-0 text-left disabled:cursor-default"
                   >
@@ -112,7 +112,7 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => removeFromHistory(entry.movieId)}
+                    onClick={() => removeFromHistory(entry.contentKey || entry.movieId)}
                     className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-black/65 text-white/55 shadow-sm backdrop-blur-sm hover:bg-red-950/90 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
                     title={`Remove ${entry.title} from recently watched`}
                     aria-label={`Remove ${entry.title} from recently watched`}

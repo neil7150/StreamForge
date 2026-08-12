@@ -1,3 +1,4 @@
+import { net } from 'electron'
 import {
   buildMagnetURI,
   decodeXmlText,
@@ -6,11 +7,13 @@ import {
   normalizeInfoHash,
   parseFileSize,
   type TorrentProviderName,
+  type SourceProviderConfig,
   type TorrentProviderStatus,
   type TorrentSearchResponse,
   type TorrentSearchResult
 } from './provider-policy'
 import { ProviderHealthTracker, SearchResponseCache } from './provider-resilience'
+import { fetchJSONWithFailover } from './provider-endpoints'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -23,6 +26,8 @@ const PROVIDER_TIMEOUT_MS = 8_000
 const providerHealth = new ProviderHealthTracker()
 const searchCache = new SearchResponseCache()
 const inFlightSearches = new Map<string, Promise<TorrentSearchResponse>>()
+const YTS_BASE_URLS = ['https://yts.bz', 'https://yts.gg', 'https://yts.lt', 'https://yts.am', 'https://yts.ag']
+let preferredYTSBaseURL = YTS_BASE_URLS[0]
 
 const CATEGORY_MAP: Record<string, string> = {
   '100': 'Audio',
@@ -134,12 +139,19 @@ async function runProvider(
 }
 
 async function fetchJSON(url: string): Promise<unknown> {
-  const response = await fetch(url, {
+  const response = await providerFetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return response.json()
+}
+
+function providerFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  // Chromium's network service handles a few provider TLS/CDN paths that
+  // Node's undici client resets. Unit-test and non-Electron callers retain fetch.
+  if (process.versions.electron) return net.fetch(input instanceof URL ? input.toString() : input, init)
+  return fetch(input, init)
 }
 
 async function searchAPIBay(query: string): Promise<TorrentSearchResult[]> {
@@ -183,7 +195,7 @@ function readXmlTag(itemXml: string, tag: string): string {
 }
 
 async function searchNyaa(query: string): Promise<TorrentSearchResult[]> {
-  const response = await fetch(`https://nyaa.si/?page=rss&q=${encodeURIComponent(query)}`, {
+  const response = await providerFetch(`https://nyaa.si/?page=rss&q=${encodeURIComponent(query)}`, {
     headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
   })
@@ -229,9 +241,14 @@ async function searchNyaa(query: string): Promise<TorrentSearchResult[]> {
 }
 
 async function searchYTS(query: string): Promise<TorrentSearchResult[]> {
-  const payload = asRecord(await fetchJSON(
-    `https://yts.mx/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}`
-  ))
+  const endpoints = [preferredYTSBaseURL, ...YTS_BASE_URLS.filter((url) => url !== preferredYTSBaseURL)]
+  const { payload: rawPayload, endpoint } = await fetchJSONWithFailover(
+    endpoints,
+    `/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}`,
+    providerFetch
+  )
+  preferredYTSBaseURL = endpoint
+  const payload = asRecord(rawPayload)
   const data = asRecord(payload?.data)
   const movies = data?.movies
   if (movies === undefined) return []
@@ -273,19 +290,116 @@ async function searchYTS(query: string): Promise<TorrentSearchResult[]> {
   return results
 }
 
-const PROVIDER_SEARCHES: Record<TorrentProviderName, (query: string) => Promise<TorrentSearchResult[]>> = {
+async function searchEZTV(_query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
+  const imdbNumber = config.imdbId?.replace(/^tt/i, '')
+  if (!imdbNumber) return []
+  const payload = asRecord(await fetchJSON(`https://eztvx.to/api/get-torrents?limit=100&imdb_id=${encodeURIComponent(imdbNumber)}`))
+  if (!payload || !Array.isArray(payload.torrents)) throw new Error('Invalid response')
+
+  const results: TorrentSearchResult[] = []
+  for (const value of payload.torrents) {
+    const item = asRecord(value)
+    if (!item) continue
+    const hash = normalizeInfoHash(item.hash)
+    const name = (asString(item.title) || asString(item.filename)).trim()
+    if (!hash || !name) continue
+    const magnetURI = asString(item.magnet_url).startsWith('magnet:')
+      ? asString(item.magnet_url)
+      : buildMagnetURI(hash, name)
+    if (!magnetURI) continue
+    const sizeBytes = Math.round(asNumber(item.size_bytes))
+    results.push({
+      id: `eztv-${asDisplayString(item.id) || hash}`,
+      name,
+      magnetURI,
+      seeders: Math.round(asNumber(item.seeds)),
+      leechers: Math.round(asNumber(item.peers)),
+      size: formatFileSize(sizeBytes),
+      sizeBytes,
+      category: 'TV',
+      added: formatUnixDate(item.date_released_unix),
+      provider: 'EZTV'
+    })
+  }
+  return results
+}
+
+function readTorznabAttribute(itemXml: string, name: string): string {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = itemXml.match(new RegExp(`<(?:torznab|newznab):attr[^>]+name=["']${escaped}["'][^>]+value=["']([^"']*)["'][^>]*>`, 'i'))
+    ?? itemXml.match(new RegExp(`<(?:torznab|newznab):attr[^>]+value=["']([^"']*)["'][^>]+name=["']${escaped}["'][^>]*>`, 'i'))
+  return match ? decodeXmlText(match[1]) : ''
+}
+
+function torznabCategoryLabel(value: string): string {
+  const category = Number(value)
+  if (category >= 5000 && category < 6000) return 'TV'
+  if (category >= 2000 && category < 3000) return 'Movies'
+  return value || 'Video'
+}
+
+async function searchTorznab(query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
+  if (!config.torznabUrl) return []
+  const url = new URL(config.torznabUrl)
+  url.searchParams.set('t', 'search')
+  url.searchParams.set('q', query)
+  url.searchParams.set('attrs', 'infohash,magneturl,seeders,peers,size,category')
+  if (config.torznabApiKey) url.searchParams.set('apikey', config.torznabApiKey)
+  const response = await providerFetch(url, {
+    headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const xml = await response.text()
+  if (!/<(?:rss|channel)[\s>]/i.test(xml)) throw new Error('Invalid Torznab response')
+
+  const results: TorrentSearchResult[] = []
+  const itemRegex = /<item>([\s\S]*?)<\/item>/gi
+  let itemMatch: RegExpExecArray | null
+  while ((itemMatch = itemRegex.exec(xml)) !== null) {
+    const itemXml = itemMatch[1]
+    const name = readXmlTag(itemXml, 'title')
+    const hash = normalizeInfoHash(readTorznabAttribute(itemXml, 'infohash'))
+    const magnetValue = readTorznabAttribute(itemXml, 'magneturl') || readXmlTag(itemXml, 'link')
+    const magnetURI = magnetValue.startsWith('magnet:') ? magnetValue : (hash ? buildMagnetURI(hash, name) : null)
+    if (!name || !magnetURI) continue
+    const sizeBytes = Math.round(asNumber(readTorznabAttribute(itemXml, 'size') || readXmlTag(itemXml, 'size')))
+    const published = readXmlTag(itemXml, 'pubDate')
+    const publishedDate = published ? new Date(published) : null
+    results.push({
+      id: `torznab-${hash || results.length}`,
+      name,
+      magnetURI,
+      seeders: Math.round(asNumber(readTorznabAttribute(itemXml, 'seeders'))),
+      leechers: Math.round(asNumber(readTorznabAttribute(itemXml, 'peers') || readTorznabAttribute(itemXml, 'leechers'))),
+      size: formatFileSize(sizeBytes),
+      sizeBytes,
+      category: torznabCategoryLabel(readTorznabAttribute(itemXml, 'category')),
+      added: publishedDate && Number.isFinite(publishedDate.getTime())
+        ? publishedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+        : '',
+      provider: 'Torznab'
+    })
+  }
+  return results
+}
+
+const PROVIDER_SEARCHES: Record<TorrentProviderName, (query: string, config: SourceProviderConfig) => Promise<TorrentSearchResult[]>> = {
   APIBay: searchAPIBay,
   Nyaa: searchNyaa,
-  YTS: searchYTS
+  YTS: searchYTS,
+  EZTV: searchEZTV,
+  Torznab: searchTorznab
 }
 
 async function executeProviderSearch(
   query: string,
   cacheKey: string,
-  providers: TorrentProviderName[]
+  providers: TorrentProviderName[],
+  config: SourceProviderConfig
 ): Promise<TorrentSearchResponse> {
   const outcomes = await Promise.all(providers.map((name) => (
-    runProvider(name, () => PROVIDER_SEARCHES[name](query))
+    runProvider(name, () => PROVIDER_SEARCHES[name](query, config))
   )))
 
   const response: TorrentSearchResponse = {
@@ -309,10 +423,11 @@ async function executeProviderSearch(
 
 export async function searchTorrentProviders(
   query: string,
-  providers: TorrentProviderName[] = ['APIBay', 'Nyaa', 'YTS']
+  providers: TorrentProviderName[] = ['APIBay', 'Nyaa', 'YTS'],
+  config: SourceProviderConfig = {}
 ): Promise<TorrentSearchResponse> {
   const uniqueProviders = [...new Set(providers)]
-  const cacheKey = `${uniqueProviders.join(',')}:${query}`
+  const cacheKey = `${uniqueProviders.join(',')}:${config.imdbId || ''}:${config.torznabUrl || ''}:${query}`
   const fresh = searchCache.getFresh(cacheKey)
   if (fresh) {
     return {
@@ -326,7 +441,7 @@ export async function searchTorrentProviders(
   const existing = inFlightSearches.get(key)
   if (existing) return existing
 
-  const pending = executeProviderSearch(query, cacheKey, uniqueProviders)
+  const pending = executeProviderSearch(query, cacheKey, uniqueProviders, config)
     .finally(() => inFlightSearches.delete(key))
   inFlightSearches.set(key, pending)
   return pending

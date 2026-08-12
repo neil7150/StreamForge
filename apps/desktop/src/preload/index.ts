@@ -16,6 +16,9 @@ const torrentAPI = {
   addDownload: (magnetURI: string): Promise<TorrentInfo> =>
     ipcRenderer.invoke('torrent:add-download', magnetURI),
 
+  queueDownload: (magnetURI: string, activeStreamInfoHash?: string): Promise<QueuedDownloadResult> =>
+    ipcRenderer.invoke('torrent:queue-download', magnetURI, activeStreamInfoHash),
+
   getDownloads: (): Promise<TorrentInfo[]> =>
     ipcRenderer.invoke('torrent:get-downloads'),
 
@@ -73,9 +76,18 @@ const torrentAPI = {
   searchMovieTorrents: (request: MovieTorrentSearchRequest): Promise<TorrentSearchResponse> =>
     ipcRenderer.invoke('search:movie-torrents', request),
 
+  searchOnlineSubtitles: (request: OnlineSubtitleSearchRequest): Promise<OnlineSubtitleResult[]> =>
+    ipcRenderer.invoke('subtitles:search', request),
+
+  downloadOnlineSubtitle: (apiKey: string, fileId: number): Promise<string> =>
+    ipcRenderer.invoke('subtitles:download', apiKey, fileId),
+
   // Series catalog
   searchSeries: (query: string): Promise<SeriesSummary[]> =>
     ipcRenderer.invoke('catalog:search-series', query),
+
+  getPopularSeries: (): Promise<SeriesSummary[]> =>
+    ipcRenderer.invoke('catalog:popular-series'),
 
   getSeries: (seriesId: number): Promise<SeriesDetails> =>
     ipcRenderer.invoke('catalog:get-series', seriesId),
@@ -88,6 +100,9 @@ const torrentAPI = {
 
   searchMovies: (query: string): Promise<MovieSummary[]> =>
     ipcRenderer.invoke('catalog:search-movies', query),
+
+  getPopularMovies: (): Promise<MovieSummary[]> =>
+    ipcRenderer.invoke('catalog:popular-movies'),
 
   getMovie: (movieId: string): Promise<MovieDetails> =>
     ipcRenderer.invoke('catalog:get-movie', movieId),
@@ -135,6 +150,11 @@ export interface TorrentInfo {
   fileSelectionMessage: string | null
 }
 
+export interface QueuedDownloadResult {
+  infoHash: string
+  queued: boolean
+}
+
 export interface PreferredEpisodeFile {
   seasonNumber: number
   episodeNumber: number
@@ -170,9 +190,16 @@ export interface MediaInfo {
   needsVideoTranscode: boolean
   needsAudioTranscode: boolean
   needsTranscode: boolean
+  chapters?: MediaChapter[]
 }
 
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS'
+export interface MediaChapter {
+  start: number
+  end: number
+  title: string | null
+}
+
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
 
 export interface TorrentSearchResult {
   id: string
@@ -210,11 +237,34 @@ export interface EpisodeTorrentSearchRequest {
   seasonNumber: number
   episodeNumber: number
   episodeTitle?: string
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
 }
 
 export interface MovieTorrentSearchRequest {
   title: string
   year?: number
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
+}
+
+export interface OnlineSubtitleSearchRequest {
+  apiKey: string
+  query: string
+  language?: string
+  seasonNumber?: number
+  episodeNumber?: number
+}
+
+export interface OnlineSubtitleResult {
+  id: string
+  fileId: number
+  fileName: string
+  language: string
+  release: string | null
+  downloadCount: number
 }
 
 export interface SeriesSummary {

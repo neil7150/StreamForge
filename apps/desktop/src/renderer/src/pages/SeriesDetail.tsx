@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
   CalendarDays,
+  CheckCircle2,
   Clock3,
   Film,
   Loader2,
@@ -28,8 +29,11 @@ import {
   parseSeriesId,
   seasonLabel
 } from '../lib/series-detail-policy'
+import { rankSources, sortSourcesBySeeders } from '../lib/source-selection-policy'
 import { extractInfoHash } from '../lib/utils'
+import { usePlaybackSettingsStore } from '../stores/playbackSettingsStore'
 import { useTorrentStore } from '../stores/torrentStore'
+import { useUserDataStore } from '../stores/userDataStore'
 
 interface SeriesLocationState {
   series?: SeriesSummary
@@ -167,6 +171,16 @@ export default function SeriesDetail() {
   const sourceRequestRef = useRef(0)
   const addTorrent = useTorrentStore((state) => state.addTorrent)
   const clearTorrentError = useTorrentStore((state) => state.clearError)
+  const playbackSettings = usePlaybackSettingsStore()
+  const watchHistory = useUserDataStore((state) => state.history)
+  const rankedSourceResults = useMemo(
+    () => rankSources(sourceResults, playbackSettings),
+    [playbackSettings, sourceResults]
+  )
+  const displayedSourceResults = useMemo(
+    () => sortSourcesBySeeders(sourceResults),
+    [sourceResults]
+  )
 
   const selectedSeason = useMemo(
     () => seasons.find((season) => season.id === selectedSeasonId) ?? null,
@@ -273,7 +287,10 @@ export default function SeriesDetail() {
         seriesTitle: series.title,
         seasonNumber: episode.seasonNumber,
         episodeNumber: episode.episodeNumber,
-        episodeTitle: episode.title
+        episodeTitle: episode.title,
+        imdbId: series.imdbId ?? undefined,
+        torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
+        torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
       })
       if (requestId !== sourceRequestRef.current) return
       setSourceResults(response.results)
@@ -292,21 +309,56 @@ export default function SeriesDetail() {
     } finally {
       if (requestId === sourceRequestRef.current) setSourcesLoading(false)
     }
-  }, [series])
+  }, [playbackSettings.torznabApiKey, playbackSettings.torznabEnabled, playbackSettings.torznabUrl, series])
 
-  const streamSource = useCallback((source: TorrentSearchResult, episode: EpisodeSummary) => {
+  const streamSource = useCallback(async (source: TorrentSearchResult, episode: EpisodeSummary) => {
     const hash = extractInfoHash(source.magnetURI)
     if (!hash || !series || episode.episodeNumber === null) return
+    let next = episodes.find((candidate) => (
+      candidate.episodeNumber !== null
+      && candidate.seasonNumber === episode.seasonNumber
+      && candidate.episodeNumber === episode.episodeNumber! + 1
+      && !isUpcomingEpisode(candidate)
+    ))
+    if (!next) {
+      const nextSeason = [...seasons]
+        .filter((season) => season.number > episode.seasonNumber)
+        .sort((a, b) => a.number - b.number)[0]
+      if (nextSeason) {
+        const nextSeasonEpisodes = await window.torrentAPI.getSeasonEpisodes(nextSeason.id).catch(() => [])
+        next = nextSeasonEpisodes.find((candidate) => candidate.episodeNumber !== null && !isUpcomingEpisode(candidate))
+      }
+    }
     clearTorrentError()
     void addTorrent(source.magnetURI, {
       seasonNumber: episode.seasonNumber,
       episodeNumber: episode.episodeNumber
     }, {
       title: `${series.title} — ${episodeCode(episode)} ${episode.title}`,
-      posterUrl: episode.stillUrl ?? series.posterUrl ?? series.originalImageUrl
+      posterUrl: episode.stillUrl ?? series.posterUrl ?? series.originalImageUrl,
+      contentKey: `episode:tvmaze:${episode.id}`,
+      contentType: 'episode',
+      catalogId: String(episode.id),
+      seriesId: series.id,
+      seriesTitle: series.title,
+      seriesImdbId: series.imdbId ?? undefined,
+      episodeId: episode.id,
+      seasonNumber: episode.seasonNumber,
+      episodeNumber: episode.episodeNumber,
+      episodeTitle: episode.title,
+      nextEpisode: next && next.episodeNumber !== null ? {
+        id: next.id,
+        seasonId: next.seasonId,
+        seasonNumber: next.seasonNumber,
+        episodeNumber: next.episodeNumber,
+        title: next.title,
+        stillUrl: next.stillUrl
+      } : undefined,
+      sourceCandidates: rankedSourceResults,
+      sourceIndex: rankedSourceResults.findIndex((candidate) => candidate.id === source.id)
     }).catch(() => {})
     navigate('/player/' + hash)
-  }, [addTorrent, clearTorrentError, navigate, series])
+  }, [addTorrent, clearTorrentError, episodes, navigate, rankedSourceResults, seasons, series])
 
   if (pageLoading) {
     return (
@@ -434,6 +486,7 @@ export default function SeriesDetail() {
                   const upcoming = isUpcomingEpisode(episode)
                   const canSearch = episode.episodeNumber !== null && !upcoming
                   const selected = selectedEpisodeId === episode.id
+                  const watched = watchHistory.find((entry) => entry.contentKey === `episode:tvmaze:${episode.id}`)
                   const sourceActionTitle = upcoming
                     ? 'Sources become available after this episode airs'
                     : episode.episodeNumber === null
@@ -473,6 +526,8 @@ export default function SeriesDetail() {
                             {episode.airDate && <span>{formatCatalogDate(episode.airDate)}</span>}
                             {episode.runtimeMinutes && <span>{episode.runtimeMinutes} min</span>}
                             {episode.type && episode.type !== 'regular' && <span>{episode.type}</span>}
+                            {watched && watched.progress >= 0.9 && <span className="flex items-center gap-1 text-teal-200/65"><CheckCircle2 className="h-3 w-3" /> Watched</span>}
+                            {watched && watched.progress > 0 && watched.progress < 0.9 && <span className="text-teal-200/55">{Math.round(watched.progress * 100)}% watched</span>}
                           </div>
                           {episode.summary && <p className="mt-2 line-clamp-2 max-w-3xl text-[10px] leading-4 text-white/35">{episode.summary}</p>}
                         </div>
@@ -485,7 +540,7 @@ export default function SeriesDetail() {
                               <p className="text-[10px] font-semibold text-white/62">Sources for {episodeCode(episode)}</p>
                               <p className="mt-1 text-[8px] text-white/25">Only exact, single-episode releases for this show are shown.</p>
                             </div>
-                            {!sourcesLoading && sourceResults.length > 0 && <span className="text-[9px] text-white/25">{sourceResults.length} found</span>}
+                            {!sourcesLoading && rankedSourceResults.length > 0 && <div className="flex items-center gap-3"><span className="text-[9px] text-white/25">{rankedSourceResults.length} found</span><button onClick={() => streamSource(rankedSourceResults[0], episode)} className="flex h-8 items-center gap-1.5 rounded-lg bg-teal-200 px-3 text-[9px] font-semibold text-[#10201f]"><Play className="h-3 w-3 fill-current" /> Play Best</button></div>}
                           </div>
 
                           {sourcesLoading && (
@@ -504,10 +559,11 @@ export default function SeriesDetail() {
                             </div>
                           )}
 
-                          {!sourcesLoading && sourceResults.length > 0 && (
+                          {!sourcesLoading && displayedSourceResults.length > 0 && (
                             <div className="divide-y divide-white/[0.05]">
-                              {sourceResults.map((source) => (
+                              {displayedSourceResults.map((source, index) => (
                                 <div key={source.id} className="flex min-w-0 items-center gap-4 px-4 py-3">
+                                  <span className="w-4 text-center text-[8px] text-white/18">{index + 1}</span>
                                   <div className="min-w-0 flex-1">
                                     <p className="truncate text-[10px] font-medium text-white/62" title={source.name}>{source.name}</p>
                                     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[8px] text-white/27">

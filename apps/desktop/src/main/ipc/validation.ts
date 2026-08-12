@@ -7,6 +7,46 @@ const BASE32_HASH_RE = /^[a-z2-7]{32}$/i
 const MAX_MAGNET_LENGTH = 16_384
 const MAX_SEARCH_LENGTH = 200
 
+function requireOptionalSourceConfig(request: Record<string, unknown>): {
+  imdbId?: string
+  torznabUrl?: string
+  torznabApiKey?: string
+} {
+  let imdbId: string | undefined
+  if (request.imdbId !== undefined && request.imdbId !== null && request.imdbId !== '') {
+    if (typeof request.imdbId !== 'string' || !/^tt\d{5,12}$/i.test(request.imdbId.trim())) {
+      throw new TypeError('Invalid IMDb ID')
+    }
+    imdbId = request.imdbId.trim().toLowerCase()
+  }
+
+  let torznabUrl: string | undefined
+  if (request.torznabUrl !== undefined && request.torznabUrl !== null && request.torznabUrl !== '') {
+    if (typeof request.torznabUrl !== 'string' || request.torznabUrl.length > 2048) {
+      throw new TypeError('Invalid Torznab URL')
+    }
+    let parsed: URL
+    try { parsed = new URL(request.torznabUrl.trim()) } catch { throw new TypeError('Invalid Torznab URL') }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) {
+      throw new TypeError('Invalid Torznab URL')
+    }
+    torznabUrl = parsed.toString()
+  }
+
+  let torznabApiKey: string | undefined
+  if (request.torznabApiKey !== undefined && request.torznabApiKey !== null && request.torznabApiKey !== '') {
+    if (typeof request.torznabApiKey !== 'string' || request.torznabApiKey.length > 512) {
+      throw new TypeError('Invalid Torznab API key')
+    }
+    torznabApiKey = request.torznabApiKey.trim() || undefined
+  }
+  return {
+    ...(imdbId ? { imdbId } : {}),
+    ...(torznabUrl ? { torznabUrl } : {}),
+    ...(torznabApiKey ? { torznabApiKey } : {})
+  }
+}
+
 export function requireInfoHash(value: unknown): string {
   if (typeof value !== 'string' || !INFO_HASH_RE.test(value)) {
     throw new TypeError('Invalid torrent info hash')
@@ -117,7 +157,7 @@ export function requireEpisodeSearchRequest(value: unknown): EpisodeTorrentSearc
     episodeTitle = normalizedTitle || undefined
   }
 
-  return { seriesTitle, seasonNumber, episodeNumber, episodeTitle }
+  return { seriesTitle, seasonNumber, episodeNumber, episodeTitle, ...requireOptionalSourceConfig(request) }
 }
 
 export function requireMovieSearchRequest(value: unknown): MovieTorrentSearchRequest {
@@ -131,5 +171,5 @@ export function requireMovieSearchRequest(value: unknown): MovieTorrentSearchReq
     }
     year = request.year
   }
-  return { title, year }
+  return { title, year, ...requireOptionalSourceConfig(request) }
 }
