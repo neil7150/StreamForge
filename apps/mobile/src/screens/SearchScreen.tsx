@@ -1,0 +1,393 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Keyboard
+} from 'react-native'
+import { Magnet, Play, Film, Tv } from 'lucide-react-native'
+import type { NativeStackScreenProps } from '@react-navigation/native-stack'
+import type { CompositeScreenProps } from '@react-navigation/native'
+import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs'
+import type { RootStackParamList, MainTabParamList } from '../navigation/types'
+import { SearchBar } from '../components/ui/SearchBar'
+import { SourcePickerModal } from '../components/ui/SourcePickerModal'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { colors } from '../theme/colors'
+import { api } from '@streamforge/core/clients'
+import { searchMovieTorrents } from '@streamforge/core/search'
+import { isValidMagnet, extractInfoHash } from '@streamforge/core/utils'
+import type { TorrentSearchResult } from '@streamforge/core/types'
+
+type Props = CompositeScreenProps<
+  BottomTabScreenProps<MainTabParamList, 'Search'>,
+  NativeStackScreenProps<RootStackParamList>
+>
+
+export const SearchScreen = ({ navigation }: Props) => {
+  const insets = useSafeAreaInsets()
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<any[]>([])
+  const [suggestions, setSuggestions] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSearchingTorrents, setIsSearchingTorrents] = useState(false)
+
+  // Torrent source picker modal
+  const [modalVisible, setModalVisible] = useState(false)
+  const [activeMediaTitle, setActiveMediaTitle] = useState('')
+  const [torrentSources, setTorrentSources] = useState<TorrentSearchResult[]>([])
+
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null)
+
+  const isMagnet = isValidMagnet(query)
+  const infoHash = extractInfoHash(query)
+
+  const handleSearch = useCallback(async (text: string) => {
+    if (!text || text.trim().length < 2) {
+      setResults([])
+      setSuggestions([])
+      setIsLoading(false)
+      return
+    }
+
+    if (isValidMagnet(text)) {
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const [searchRes, suggestRes] = await Promise.allSettled([
+        api.search(text),
+        api.searchSuggest(text)
+      ])
+
+      if (searchRes.status === 'fulfilled' && searchRes.value?.data) {
+        setResults(searchRes.value.data)
+      } else {
+        setResults([])
+      }
+
+      if (suggestRes.status === 'fulfilled' && suggestRes.value?.data) {
+        setSuggestions(suggestRes.value.data)
+      }
+    } catch {
+      setResults([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const onChangeText = (text: string) => {
+    setQuery(text)
+    if (debounceTimer.current) clearTimeout(debounceTimer.current)
+    debounceTimer.current = setTimeout(() => {
+      handleSearch(text)
+    }, 350)
+  }
+
+  const handleSelectSuggestion = (suggestion: any) => {
+    setQuery(suggestion.title)
+    Keyboard.dismiss()
+    handleSearch(suggestion.title)
+  }
+
+  const handlePlayDirectMagnet = () => {
+    if (!infoHash) return
+    navigation.navigate('Player', {
+      infoHash,
+      title: 'Direct Magnet Stream',
+      magnetURI: query
+    })
+  }
+
+  const handleScrapeTorrentSources = async (media: any) => {
+    setActiveMediaTitle(media.title)
+    setTorrentSources([])
+    setModalVisible(true)
+    setIsSearchingTorrents(true)
+
+    try {
+      const year = media.year || (media.release_date ? new Date(media.release_date).getFullYear() : undefined)
+      const res = await searchMovieTorrents({
+        title: media.title,
+        year
+      })
+      setTorrentSources(res.results || [])
+    } catch {
+      setTorrentSources([])
+    } finally {
+      setIsSearchingTorrents(false)
+    }
+  }
+
+  const handleSelectTorrentSource = (source: TorrentSearchResult) => {
+    setModalVisible(false)
+    const hash = extractInfoHash(source.magnetURI)
+    if (hash) {
+      navigation.navigate('Player', {
+        infoHash: hash,
+        title: activeMediaTitle || source.name,
+        magnetURI: source.magnetURI,
+        fileIndex: source.fileIndex
+      })
+    }
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.searchHeader, { paddingTop: insets.top + 12 }]}>
+        <SearchBar
+          value={query}
+          onChangeText={onChangeText}
+          onSubmit={() => handleSearch(query)}
+        />
+      </View>
+
+      {/* Magnet link direct stream banner */}
+      {isMagnet && infoHash ? (
+        <TouchableOpacity
+          style={styles.magnetBanner}
+          onPress={handlePlayDirectMagnet}
+          activeOpacity={0.8}
+        >
+          <View style={styles.magnetIconBox}>
+            <Magnet size={24} color="#ffffff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.magnetTitle}>Magnet Link Detected</Text>
+            <Text style={styles.magnetHash} numberOfLines={1}>
+              {infoHash}
+            </Text>
+            <Text style={styles.magnetAction}>Tap to Stream Immediately</Text>
+          </View>
+          <Play size={20} color={colors.primary} fill={colors.primary} />
+        </TouchableOpacity>
+      ) : null}
+
+      {/* Typeahead suggestions when results are not yet submitted */}
+      {suggestions.length > 0 && results.length === 0 && !isMagnet ? (
+        <View style={styles.suggestionsContainer}>
+          {suggestions.map((item, index) => (
+            <TouchableOpacity
+              key={index}
+              style={styles.suggestionItem}
+              onPress={() => handleSelectSuggestion(item)}
+            >
+              <Text style={styles.suggestionText}>{item.title}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      {/* Search results list */}
+      {isLoading ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.searchingText}>Searching catalog...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={results}
+          keyExtractor={(item: any) => String(item.id || item.slug)}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            query.length >= 2 && !isMagnet ? (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyTitle}>No catalog results</Text>
+                <TouchableOpacity
+                  style={styles.scrapeBtn}
+                  onPress={() => handleScrapeTorrentSources({ title: query })}
+                >
+                  <Text style={styles.scrapeBtnText}>
+                    Search Torrent Swarms for "{query}"
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null
+          }
+          renderItem={({ item }: { item: any }) => (
+            <TouchableOpacity
+              style={styles.resultItem}
+              onPress={() => {
+                if (item.type === 'show') {
+                  navigation.navigate('SeriesDetail', { slug: item.slug, id: item.id })
+                } else {
+                  navigation.navigate('MovieDetail', { slug: item.slug, id: item.id })
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.mediaIconBox}>
+                {item.type === 'show' ? (
+                  <Tv size={20} color={colors.primary} />
+                ) : (
+                  <Film size={20} color={colors.accent} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.resultTitle}>{item.title}</Text>
+                <Text style={styles.resultMeta}>
+                  {item.type === 'show' ? 'TV Series' : 'Movie'}
+                  {item.release_date ? ` • ${new Date(item.release_date).getFullYear()}` : ''}
+                  {item.avg_rating ? ` • ★ ${Number(item.avg_rating).toFixed(1)}` : ''}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.streamIconBtn}
+                onPress={() => handleScrapeTorrentSources(item)}
+              >
+                <Play size={16} color="#ffffff" fill="#ffffff" />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          )}
+        />
+      )}
+
+      {/* Torrent source picker modal */}
+      <SourcePickerModal
+        visible={modalVisible}
+        onClose={() => setModalVisible(false)}
+        onSelectSource={handleSelectTorrentSource}
+        sources={torrentSources}
+        isLoading={isSearchingTorrents}
+        title={activeMediaTitle}
+      />
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background
+  },
+  searchHeader: {
+    padding: 16,
+    paddingBottom: 8
+  },
+  magnetBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    marginHorizontal: 16,
+    marginVertical: 8,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    gap: 12
+  },
+  magnetIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  magnetTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  magnetHash: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: 'monospace',
+    marginTop: 2
+  },
+  magnetAction: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4
+  },
+  suggestionsContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 8
+  },
+  suggestionItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: colors.border
+  },
+  suggestionText: {
+    color: colors.textSecondary,
+    fontSize: 14
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  searchingText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginTop: 12
+  },
+  listContent: {
+    padding: 16
+  },
+  resultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 12
+  },
+  mediaIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  resultTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  resultMeta: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 3
+  },
+  streamIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  emptyContainer: {
+    padding: 32,
+    alignItems: 'center'
+  },
+  emptyTitle: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    marginBottom: 16
+  },
+  scrapeBtn: {
+    backgroundColor: colors.surfaceLight,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.primary
+  },
+  scrapeBtnText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '600'
+  }
+})

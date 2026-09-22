@@ -4,7 +4,8 @@
   "private": true,
   "description": "StreamForge — Legal Torrent Streaming Platform",
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "packages/*"
   ],
   "scripts": {
     "dev": "npm run dev --workspace=apps/desktop",
