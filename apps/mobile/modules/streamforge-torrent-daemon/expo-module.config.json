@@ -1,0 +1,14 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": [
+      "expo.modules.streamforgetorrentdaemon.StreamForgeTorrentDaemonModule"
+    ],
+    "gradleAarProjects": [
+      {
+        "name": "streamforge-go",
+        "aarFilePath": "android/libs/streamforge.aar"
+      }
+    ]
+  }
+}

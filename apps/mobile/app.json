@@ -47,7 +47,8 @@
     },
     "plugins": [
       "expo-screen-orientation",
-      "expo-video"
+      "expo-video",
+      "./plugins/with-localhost-cleartext"
     ]
   }
 }

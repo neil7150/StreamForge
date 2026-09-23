@@ -73,8 +73,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
   } = params
 
   const isDirectStream = Boolean(initialStreamURL)
-  const defaultStreamURL = initialStreamURL || `http://127.0.0.1:8888/stream/${infoHash}`
-  const [streamURL, setStreamURL] = useState<string>(defaultStreamURL)
+  const [streamURL, setStreamURL] = useState<string>(initialStreamURL || '')
   const [isPlaying, setIsPlaying] = useState(true)
   const [currentTime, setCurrentTime] = useState(initialTime || 0)
   const [duration, setDuration] = useState(initialDuration || 0)
@@ -138,6 +137,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
       mobileTorrentAPI.addTorrent(magnetURI, preferredEp).then((info) => {
         if (isMounted && info.streamURL) {
+          setPlaybackError(null)
           setStreamURL(info.streamURL)
           setIsBuffering(false)
         }
@@ -206,18 +206,15 @@ const PlayerContent = ({ navigation, route }: Props) => {
   }, [infoHash, magnetURI])
 
   // 4. Update player source when streamURL changes AFTER initial render
-  const initialStreamURLRef = useRef(defaultStreamURL)
+  const initialStreamURLRef = useRef(initialStreamURL || '')
   useEffect(() => {
     // Only replace if the URL has actually changed from what the player was
     // initialized with — avoids a redundant reload on first render.
     if (streamURL && player && streamURL !== initialStreamURLRef.current) {
-      try {
-        initialStreamURLRef.current = streamURL
-        player.replace(streamURL)
-        player.play()
-      } catch (err) {
-        console.warn('Failed to replace player source:', err)
-      }
+      initialStreamURLRef.current = streamURL
+      void player.replaceAsync(streamURL)
+        .then(() => player.play())
+        .catch((err) => console.warn('Failed to replace player source:', err))
     }
   }, [streamURL, player])
 
@@ -365,10 +362,12 @@ const PlayerContent = ({ navigation, route }: Props) => {
     setPlaybackError(null)
     setIsBuffering(true)
     if (isDirectStream && initialStreamURL) {
-      try {
-        player.replace(initialStreamURL)
-        player.play()
-      } catch {}
+      void player.replaceAsync(initialStreamURL)
+        .then(() => player.play())
+        .catch((err) => {
+          setPlaybackError(err instanceof Error ? err.message : 'Unable to reload this stream.')
+          setIsBuffering(false)
+        })
     } else {
       setRetryNonce((value) => value + 1)
     }

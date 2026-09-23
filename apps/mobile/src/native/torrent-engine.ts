@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native'
+import TorrentDaemon from '../../modules/streamforge-torrent-daemon'
 import type {
   TorrentAPI,
   TorrentInfo,
@@ -30,14 +30,130 @@ import {
 } from '@streamforge/core/clients'
 import { extractInfoHash } from '@streamforge/core/utils'
 
-const { TorrentDaemon } = NativeModules
-
 const progressListeners = new Set<(data: TorrentProgress) => void>()
 const readyListeners = new Set<(data: TorrentInfo) => void>()
 const errorListeners = new Set<(data: { infoHash: string; error: string }) => void>()
 
 // In-memory active streams for mobile
 const activeStreams = new Map<string, TorrentInfo>()
+
+const DAEMON_PORT = 8888
+let daemonStartPromise: Promise<string> | null = null
+let statsTimer: ReturnType<typeof setInterval> | null = null
+let statsPollInFlight = false
+
+type NativeTorrentStats = {
+  infoHash?: string
+  progress?: number
+  downloadSpeed?: number
+  uploadSpeed?: number
+  peers?: number
+  downloaded?: number
+  totalSize?: number
+  bufferProgress?: number
+}
+
+export const initializeMobileTorrentEngine = async (): Promise<string> => {
+  if (!TorrentDaemon) {
+    throw new Error('Torrent streaming requires the StreamForge Android development build')
+  }
+
+  if (!daemonStartPromise) {
+    daemonStartPromise = TorrentDaemon.startDaemon(DAEMON_PORT).catch((error) => {
+      daemonStartPromise = null
+      throw error
+    })
+  }
+  return daemonStartPromise
+}
+
+export const shutdownMobileTorrentEngine = async (): Promise<void> => {
+  if (statsTimer) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
+  activeStreams.clear()
+  daemonStartPromise = null
+  if (TorrentDaemon) {
+    await TorrentDaemon.stopDaemon()
+  }
+}
+
+const emitProgress = (infoHash: string, stats: NativeTorrentStats) => {
+  const totalSize = stats.totalSize ?? 0
+  const downloaded = stats.downloaded ?? 0
+  const downloadSpeed = stats.downloadSpeed ?? 0
+  const remainingBytes = Math.max(0, totalSize - downloaded)
+  const connectedPeers = stats.peers ?? 0
+
+  const progress: TorrentProgress = {
+    infoHash,
+    progress: stats.progress ?? 0,
+    downloadSpeed,
+    uploadSpeed: stats.uploadSpeed ?? 0,
+    numPeers: connectedPeers,
+    downloaded,
+    uploaded: 0,
+    totalSize,
+    timeRemaining: downloadSpeed > 0 ? remainingBytes / downloadSpeed : 0,
+    ratio: 0,
+    bufferProgress: stats.bufferProgress ?? stats.progress ?? 0,
+    mode: 'stream',
+    peerConnections: {
+      discovered: connectedPeers,
+      pending: 0,
+      connected: connectedPeers,
+      fastTcpFallbacksArmed: 0,
+      bySource: {
+        tracker: 0,
+        dht: 0,
+        lsd: 0,
+        pex: 0,
+        manual: 0,
+        unknown: connectedPeers
+      },
+      byTransport: {
+        tcp: 0,
+        utp: 0,
+        webrtc: 0,
+        webseed: 0,
+        unknown: connectedPeers
+      }
+    }
+  }
+
+  progressListeners.forEach((listener) => listener(progress))
+}
+
+const pollTorrentStats = async () => {
+  const daemon = TorrentDaemon
+  if (!daemon || statsPollInFlight || activeStreams.size === 0) return
+  statsPollInFlight = true
+  try {
+    await Promise.all(Array.from(activeStreams.keys()).map(async (infoHash) => {
+      try {
+        const rawStats = await daemon.getStats(infoHash)
+        const stats = JSON.parse(rawStats) as NativeTorrentStats
+        if (stats.infoHash) emitProgress(infoHash, stats)
+      } catch {
+        // A stream can disappear between the active-stream snapshot and this poll.
+      }
+    }))
+  } finally {
+    statsPollInFlight = false
+  }
+}
+
+const updateStatsPolling = () => {
+  const shouldPoll = progressListeners.size > 0 && activeStreams.size > 0
+  if (shouldPoll && !statsTimer) {
+    void pollTorrentStats()
+    statsTimer = setInterval(() => void pollTorrentStats(), 1000)
+  } else if (!shouldPoll && statsTimer) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
+}
 
 export const mobileTorrentAPI: TorrentAPI = {
   // ─── Streaming ─────────────────────────────────────────────────────────────
@@ -46,33 +162,36 @@ export const mobileTorrentAPI: TorrentAPI = {
     if (!infoHash) {
       throw new Error('Invalid magnet link: missing info hash')
     }
-    const defaultStreamURL = `http://127.0.0.1:8888/stream/${infoHash}`
+    try {
+      await initializeMobileTorrentEngine()
+      if (!TorrentDaemon) throw new Error('Torrent daemon native module is unavailable')
 
-    if (!TorrentDaemon?.addMagnet) {
-      throw new Error('Torrent daemon native module is unavailable')
-    }
+      const streamUrl = await TorrentDaemon.addMagnet(magnetURI, preferredEpisode?.fileIndex ?? -1)
+      if (typeof streamUrl !== 'string' || !/^https?:\/\//i.test(streamUrl)) {
+        throw new Error('Torrent daemon returned an invalid stream URL')
+      }
 
-    const streamUrl = await TorrentDaemon.addMagnet(magnetURI, preferredEpisode?.fileIndex ?? -1)
-    if (typeof streamUrl !== 'string' || !/^https?:\/\//i.test(streamUrl) || streamUrl.startsWith('ERROR:')) {
-      throw new Error(typeof streamUrl === 'string' && streamUrl.startsWith('ERROR:')
-        ? streamUrl.slice('ERROR:'.length).trim()
-        : 'Torrent daemon returned an invalid stream URL')
+      const info: TorrentInfo = {
+        infoHash,
+        name: 'Torrent Stream',
+        files: [],
+        totalSize: 0,
+        streamURL: streamUrl,
+        ready: true,
+        mode: 'stream',
+        selectedFileIndex: preferredEpisode?.fileIndex ?? null,
+        requiresFileSelection: false,
+        fileSelectionMessage: null
+      }
+      activeStreams.set(infoHash, info)
+      readyListeners.forEach((listener) => listener(info))
+      updateStatsPolling()
+      return info
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to start torrent stream'
+      errorListeners.forEach((listener) => listener({ infoHash, error: message }))
+      throw error
     }
-
-    const info: TorrentInfo = {
-      infoHash,
-      name: 'Torrent Stream',
-      files: [],
-      totalSize: 0,
-      streamURL: streamUrl || defaultStreamURL,
-      ready: true,
-      mode: 'stream',
-      selectedFileIndex: preferredEpisode?.fileIndex ?? null,
-      requiresFileSelection: false,
-      fileSelectionMessage: null
-    }
-    activeStreams.set(infoHash, info)
-    return info
   },
 
   getStreams: async (): Promise<TorrentInfo[]> => {
@@ -81,7 +200,8 @@ export const mobileTorrentAPI: TorrentAPI = {
 
   cleanupStream: async (infoHash: string): Promise<void> => {
     activeStreams.delete(infoHash)
-    if (TorrentDaemon?.cleanupStream) {
+    updateStatsPolling()
+    if (TorrentDaemon) {
       try {
         await TorrentDaemon.cleanupStream(infoHash)
       } catch {}
@@ -103,9 +223,10 @@ export const mobileTorrentAPI: TorrentAPI = {
   // ─── Shared ────────────────────────────────────────────────────────────────
   removeTorrent: async (infoHash: string): Promise<void> => {
     activeStreams.delete(infoHash)
-    if (TorrentDaemon?.removeTorrent) {
+    updateStatsPolling()
+    if (TorrentDaemon) {
       try {
-        await TorrentDaemon.removeTorrent(infoHash)
+        await TorrentDaemon.cleanupStream(infoHash)
       } catch {}
     }
   },
@@ -142,29 +263,28 @@ export const mobileTorrentAPI: TorrentAPI = {
     if (stream) {
       stream.selectedFileIndex = fileIndex
     }
-    return `http://127.0.0.1:8888/stream/${infoHash}?file=${fileIndex}`
+    return `http://localhost:${DAEMON_PORT}/stream/${infoHash}?file=${fileIndex}`
   },
 
   notifySeek: async (infoHash: string, position: number): Promise<void> => {
-    if (TorrentDaemon?.notifySeek) {
-      try {
-        await TorrentDaemon.notifySeek(infoHash, position)
-      } catch {}
-    }
+    void infoHash
+    void position
   },
 
   updatePlaybackPosition: async (infoHash: string, currentTime: number, duration: number): Promise<void> => {
-    if (TorrentDaemon?.updatePlaybackPosition) {
-      try {
-        await TorrentDaemon.updatePlaybackPosition(infoHash, currentTime, duration)
-      } catch {}
-    }
+    void infoHash
+    void currentTime
+    void duration
   },
 
   // ─── Events ────────────────────────────────────────────────────────────────
   onTorrentProgress: (callback) => {
     progressListeners.add(callback)
-    return () => progressListeners.delete(callback)
+    updateStatsPolling()
+    return () => {
+      progressListeners.delete(callback)
+      updateStatsPolling()
+    }
   },
 
   onTorrentReady: (callback) => {

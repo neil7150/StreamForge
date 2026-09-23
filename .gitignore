@@ -55,5 +55,8 @@ coverage/
 
 # Mobile local state and generated Go bindings
 apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/modules/streamforge-torrent-daemon/android/libs/*.aar
 services/torrent-daemon/*.aar
 services/torrent-daemon/*-sources.jar
