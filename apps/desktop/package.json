@@ -1,6 +1,6 @@
 {
   "name": "streamforge-desktop",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "StreamForge Desktop — Legal Torrent Streaming",
   "main": "./out/main/index.js",
   "scripts": {
@@ -12,25 +12,23 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-isolation=none tests/automatic-fallback-policy.test.ts tests/provider-endpoints.test.ts tests/source-selection-policy.test.ts tests/stream-policy.test.ts tests/validation.test.ts tests/provider-policy.test.ts tests/provider-resilience.test.ts tests/peer-transport-policy.test.ts tests/playback-diagnostics.test.ts tests/playback-resume.test.ts tests/history-policy.test.ts tests/tvmaze-client.test.ts tests/yts-movie-client.test.ts tests/movie-catalog-client.test.ts tests/series-detail-policy.test.ts tests/movie-detail-policy.test.ts tests/episode-search.test.ts tests/episode-file-policy.test.ts tests/movie-search.test.ts",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-isolation=none tests/anilist-client.test.ts tests/automatic-fallback-policy.test.ts tests/provider-endpoints.test.ts tests/provider-parsers.test.ts tests/renderer-utils.test.ts tests/source-selection-policy.test.ts tests/stream-policy.test.ts tests/validation.test.ts tests/provider-policy.test.ts tests/provider-resilience.test.ts tests/peer-transport-policy.test.ts tests/playback-diagnostics.test.ts tests/playback-resume.test.ts tests/history-policy.test.ts tests/tvmaze-client.test.ts tests/yts-movie-client.test.ts tests/movie-catalog-client.test.ts tests/series-detail-policy.test.ts tests/movie-detail-policy.test.ts tests/episode-search.test.ts tests/episode-file-policy.test.ts tests/movie-search.test.ts",
     "test:compatibility": "node tests/run-media-compatibility.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "build:verify": "npm run test && npm run test:compatibility && npm run typecheck && npm run build:unpack && npm run verify:package",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@electron-toolkit/preload": "^3.0.1",
+    "@streamforge/core": "*",
     "@electron-toolkit/utils": "^3.0.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@fontsource-variable/inter": "^5.1.1",
     "clsx": "^2.1.1",
     "ffmpeg-static": "^5.3.0",
     "lucide-react": "^0.460.0",
-    "parse-torrent": "^11.0.17",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
-    "video.js": "^8.17.0",
     "webtorrent": "^2.5.1",
     "zustand": "^4.5.5"
   },
@@ -42,6 +40,7 @@
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "parse-torrent": "^11.0.17",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
@@ -57,12 +56,17 @@
     "files": [
       "out/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "win": {
       "target": [
         "nsis"
       ],
-      "icon": "resources/icon.ico",
-      "signAndEditExecutable": false
+      "icon": "resources/icon.ico"
     },
     "mac": {
       "target": [

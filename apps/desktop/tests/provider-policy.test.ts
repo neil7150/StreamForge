@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import parseTorrent from 'parse-torrent'
 import {
   appendFallbackTrackers,
   buildMagnetURI,
@@ -42,13 +43,16 @@ test('builds magnets only from valid hexadecimal info hashes', () => {
   assert.equal(extractInfoHashFromMagnet('magnet:?xt=urn:btih:'), null)
 })
 
-test('adds fallback trackers to saved magnets without duplicating existing entries', () => {
+test('adds fallback trackers without breaking WebTorrent magnet parsing', async () => {
   const savedMagnet = `magnet:?xt=urn:btih:${HASH_A}&tr=${encodeURIComponent('http://tracker.qu.ax:6969/announce')}`
   const updated = appendFallbackTrackers(savedMagnet)
   const trackers = new URL(updated).searchParams.getAll('tr')
 
   assert.equal(trackers.length, new Set(trackers).size)
   assert.ok(trackers.length > 1)
+  assert.equal(extractInfoHashFromMagnet(updated), HASH_A)
+  assert.match(updated, /xt=urn:btih:/)
+  assert.equal((await parseTorrent(updated)).infoHash, HASH_A)
 })
 
 test('deduplicates providers by hash and keeps the healthier result', () => {

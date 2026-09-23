@@ -185,12 +185,15 @@ export default function Player() {
   const smartDownloadedEpisodeRef = useRef<number | null>(null)
   const connectionStartedAtRef = useRef(Date.now())
   const isCancellingRef = useRef(false)
+  const [fallbackToast, setFallbackToast] = useState<string | null>(null)
+  const stallCounterRef = useRef(0)
   const initialHistoryEntryRef = useRef(savedHistoryEntry)
   const resumeHashRef = useRef(infoHash)
   if (resumeHashRef.current !== infoHash) {
     resumeHashRef.current = infoHash
     initialHistoryEntryRef.current = savedHistoryEntry
     playbackStartedRef.current = false
+    stallCounterRef.current = 0
   }
   const playbackTitle = streamDisplayMetadata?.title.trim()
     || initialHistoryEntryRef.current?.title.trim()
@@ -235,7 +238,7 @@ export default function Player() {
     }
   }, [streamError])
 
-  const handleRetry = useCallback(async () => {
+  const handleRetry = useCallback(async (resumeFromOffset?: number) => {
     if (!infoHash) return
     cancelQueuedRapidSkip()
     setError(null)
@@ -246,7 +249,9 @@ export default function Player() {
     setSelectedAudioTrackIndex(null)
     setSelectedFileIndex(null)
     setManualFileSelectionComplete(false)
-    setPlaybackOffset(0)
+    // Preserve a recovery offset (e.g. mid-stream stall resume) if provided,
+    // otherwise reset to start so normal retries always begin from the beginning.
+    setPlaybackOffset(resumeFromOffset ?? 0)
     setPhase('connecting')
     connectionStartedAtRef.current = Date.now()
     setMediaProbeAttemptCount(0)
@@ -281,8 +286,57 @@ export default function Player() {
       alreadyAttempted: fallbackAttemptedRef.current === infoHash
     })) return
     fallbackAttemptedRef.current = infoHash
+    setFallbackToast('Primary source failed. Switching to next best source...')
+    const timer = setTimeout(() => setFallbackToast(null), 4000)
     void handleRetry()
+    return () => clearTimeout(timer)
   }, [handleRetry, infoHash, playbackSettings.automaticSourceFallback, streamDisplayMetadata, streamError])
+
+  // Proactive Stream Health Monitor: Detect dead swarms or unrecoverable mid-stream stalls
+  useEffect(() => {
+    if (!infoHash || !playbackSettings.automaticSourceFallback) return
+
+    const candidates = streamDisplayMetadata?.sourceCandidates ?? []
+    const index = streamDisplayMetadata?.sourceIndex ?? -1
+    const hasMoreSources = index >= 0 && index + 1 < candidates.length
+    if (!hasMoreSources) return
+
+    const interval = setInterval(() => {
+      const isConnecting = phase === 'connecting' || phase === 'metadata'
+      const isBufferingOrStalled = phase === 'buffering' || phase === 'stalled'
+      const downloadSpeed = prog?.downloadSpeed ?? 0
+      const numPeers = prog?.numPeers ?? 0
+
+      // Case 1: Initial startup stall (no peers or metadata for 20+ seconds)
+      if (isConnecting && !playbackStartedRef.current) {
+        const elapsed = (Date.now() - connectionStartedAtRef.current) / 1000
+        if (elapsed >= 22 && downloadSpeed === 0 && numPeers === 0) {
+          if (fallbackAttemptedRef.current !== infoHash) {
+            fallbackAttemptedRef.current = infoHash
+            setFallbackToast('Initial source unresponsive. Switching to next best source...')
+            setTimeout(() => setFallbackToast(null), 4000)
+            void handleRetry()
+          }
+        }
+      }
+
+      // Case 2: Mid-stream unrecoverable stall (playback started, but frozen with 0 B/s for 12+ consecutive seconds)
+      if (playbackStartedRef.current && isBufferingOrStalled && downloadSpeed === 0) {
+        stallCounterRef.current += 1
+        if (stallCounterRef.current >= 12 && fallbackAttemptedRef.current !== infoHash) {
+          fallbackAttemptedRef.current = infoHash
+          const resumeAt = currentPlaybackTimeRef.current > 0 ? currentPlaybackTimeRef.current : undefined
+          setFallbackToast('Stream stalled. Recovering on next best source...')
+          setTimeout(() => setFallbackToast(null), 4000)
+          void handleRetry(resumeAt)
+        }
+      } else {
+        stallCounterRef.current = 0
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [handleRetry, infoHash, phase, playbackSettings.automaticSourceFallback, prog?.downloadSpeed, prog?.numPeers, streamDisplayMetadata])
 
   const handlePlaybackStateChange = useCallback((state: ConnectionPhase) => {
     if (state === 'playing') {
@@ -792,8 +846,18 @@ export default function Player() {
         episodeNumber: next.episodeNumber,
         episodeTitle: next.title,
         imdbId: streamDisplayMetadata.seriesImdbId,
-        torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
-        torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
+        seriesAliases: streamDisplayMetadata.seriesAliases,
+        absoluteEpisodeNumber: next.absoluteEpisodeNumber,
+        absoluteEpisodeOnly: streamDisplayMetadata.absoluteEpisodeOnly,
+        torznabEndpoints: playbackSettings.torznabEnabled
+          ? playbackSettings.torznabEndpoints.filter((endpoint) => endpoint.url.trim()).map((endpoint) => ({
+            url: endpoint.url.trim(),
+            ...(endpoint.apiKey.trim() ? { apiKey: endpoint.apiKey.trim() } : {})
+          }))
+          : undefined,
+        stremioAddonUrls: playbackSettings.stremioAddonEnabled
+          ? playbackSettings.stremioAddonUrls.map((url) => url.trim()).filter(Boolean)
+          : undefined
       })
       const ranked = rankSources(response.results, playbackSettings)
       if (ranked.length === 0) throw new Error('No exact source is available for the next episode.')
@@ -813,8 +877,20 @@ export default function Player() {
             episodeNumber: episode.episodeNumber,
             episodeTitle: episode.title,
             imdbId: streamDisplayMetadata.seriesImdbId,
-            torznabUrl: playbackSettings.torznabEnabled ? playbackSettings.torznabUrl : undefined,
-            torznabApiKey: playbackSettings.torznabEnabled ? playbackSettings.torznabApiKey : undefined
+            seriesAliases: streamDisplayMetadata.seriesAliases,
+            absoluteEpisodeNumber: next.absoluteEpisodeNumber === undefined
+              ? undefined
+              : next.absoluteEpisodeNumber + (episode.episodeNumber - next.episodeNumber),
+            absoluteEpisodeOnly: streamDisplayMetadata.absoluteEpisodeOnly,
+            torznabEndpoints: playbackSettings.torznabEnabled
+              ? playbackSettings.torznabEndpoints.filter((endpoint) => endpoint.url.trim()).map((endpoint) => ({
+                url: endpoint.url.trim(),
+                ...(endpoint.apiKey.trim() ? { apiKey: endpoint.apiKey.trim() } : {})
+              }))
+              : undefined,
+            stremioAddonUrls: playbackSettings.stremioAddonEnabled
+              ? playbackSettings.stremioAddonUrls.map((url) => url.trim()).filter(Boolean)
+              : undefined
           })
           const upcomingSources = rankSources(upcomingResponse.results, playbackSettings)
           if (upcomingSources[0]) await addDownload(upcomingSources[0].magnetURI)
@@ -832,9 +908,15 @@ export default function Player() {
       if (!hash) throw new Error('The selected next-episode source is invalid.')
       void addTorrent(ranked[0].magnetURI, {
         seasonNumber: next.seasonNumber,
-        episodeNumber: next.episodeNumber
+        episodeNumber: next.episodeNumber,
+        fileIndex: ranked[0].fileIndex,
+        absoluteEpisodeNumber: next.absoluteEpisodeNumber,
+        absoluteEpisodeOnly: streamDisplayMetadata.absoluteEpisodeOnly,
+        seriesTitles: streamDisplayMetadata.seriesAliases
       }, {
-        title: `${seriesTitle} — S${String(next.seasonNumber).padStart(2, '0')}E${String(next.episodeNumber).padStart(2, '0')} ${next.title}`,
+        title: `${seriesTitle} — ${streamDisplayMetadata.absoluteEpisodeOnly && next.absoluteEpisodeNumber !== undefined
+          ? `EP ${String(next.absoluteEpisodeNumber).padStart(3, '0')}`
+          : `S${String(next.seasonNumber).padStart(2, '0')}E${String(next.episodeNumber).padStart(2, '0')}`} ${next.title}`,
         posterUrl: next.stillUrl ?? streamDisplayMetadata.posterUrl,
         contentKey: `episode:tvmaze:${next.id}`,
         contentType: 'episode',
@@ -842,6 +924,8 @@ export default function Player() {
         seriesId,
         seriesTitle,
         seriesImdbId: streamDisplayMetadata.seriesImdbId,
+        seriesAliases: streamDisplayMetadata.seriesAliases,
+        absoluteEpisodeOnly: streamDisplayMetadata.absoluteEpisodeOnly,
         episodeId: next.id,
         seasonNumber: next.seasonNumber,
         episodeNumber: next.episodeNumber,
@@ -852,7 +936,10 @@ export default function Player() {
           seasonNumber: following.seasonNumber,
           episodeNumber: following.episodeNumber,
           title: following.title,
-          stillUrl: following.stillUrl
+          stillUrl: following.stillUrl,
+          absoluteEpisodeNumber: next.absoluteEpisodeNumber === undefined
+            ? undefined
+            : next.absoluteEpisodeNumber + 1
         } : undefined,
         sourceCandidates: ranked,
         sourceIndex: 0
@@ -1002,7 +1089,7 @@ export default function Player() {
         <p className="text-sm text-[var(--color-danger)]">{error}</p>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleRetry}
+            onClick={() => void handleRetry()}
             className="flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white transition-colors hover:brightness-110"
           >
             <RotateCcw className="h-4 w-4" />
@@ -1124,15 +1211,21 @@ export default function Player() {
         )}
         {streamURL && (
           <>
-          {resumeNoticeTime !== null && (
-            <div className="mb-2 flex items-center justify-between rounded-lg border border-teal-300/15 bg-teal-300/[0.06] px-3 py-2 text-[11px] text-white/62">
-              <span>Resumed from {formatResumeTime(resumeNoticeTime)}</span>
-              <div className="flex items-center gap-3">
-                <button onClick={restartFromBeginning} className="font-medium text-teal-200/75 hover:text-teal-100">Start over</button>
-                <button onClick={() => setResumeNoticeTime(null)} className="text-white/35 hover:text-white/65">Dismiss</button>
-              </div>
+        {fallbackToast && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-[11px] font-medium text-amber-200 animate-pulse">
+            <span className="h-2 w-2 rounded-full bg-amber-400"></span>
+            <span>{fallbackToast}</span>
+          </div>
+        )}
+        {resumeNoticeTime !== null && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-teal-300/15 bg-teal-300/[0.06] px-3 py-2 text-[11px] text-white/62">
+            <span>Resumed from {formatResumeTime(resumeNoticeTime)}</span>
+            <div className="flex items-center gap-3">
+              <button onClick={restartFromBeginning} className="font-medium text-teal-200/75 hover:text-teal-100">Start over</button>
+              <button onClick={() => setResumeNoticeTime(null)} className="text-white/35 hover:text-white/65">Dismiss</button>
             </div>
-          )}
+          </div>
+        )}
           <VideoPlayer
             src={streamURL}
             durationOverride={mediaInfo?.duration ?? 0}
@@ -1149,23 +1242,29 @@ export default function Player() {
             onPlaybackStateChange={handlePlaybackStateChange}
             onDiagnosticsChange={setVideoDiagnostics}
             subtitleTracks={subtitleTracks}
-          />
-          {skippableChapter && (
-            <button
-              onClick={() => void restartPlaybackAt(skippableChapter.end, selectedAudioTrackIndex)}
-              className="absolute bottom-7 right-8 z-20 flex items-center gap-2 rounded-lg border border-white/20 bg-black/75 px-4 py-2 text-[11px] font-semibold text-white shadow-xl backdrop-blur hover:bg-white hover:text-black"
-            >
-              Skip {/(credits|ending|outro)/i.test(skippableChapter.title ?? '') ? 'credits' : 'intro'} <SkipForward className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {upNextCountdown !== null && streamDisplayMetadata?.nextEpisode && (
-            <div className="absolute inset-x-8 bottom-7 z-20 flex items-center gap-4 rounded-xl border border-white/15 bg-[#111416]/95 p-4 shadow-2xl backdrop-blur">
-              {streamDisplayMetadata.nextEpisode.stillUrl && <img src={streamDisplayMetadata.nextEpisode.stillUrl} alt="" className="h-16 w-28 rounded-lg object-cover" />}
-              <div className="min-w-0 flex-1"><p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-200/60">Up Next</p><p className="mt-1 truncate text-[12px] font-semibold text-white/80">S{streamDisplayMetadata.nextEpisode.seasonNumber} E{streamDisplayMetadata.nextEpisode.episodeNumber} · {streamDisplayMetadata.nextEpisode.title}</p>{nextEpisodeError ? <p className="mt-1 text-[9px] text-red-200/65">{nextEpisodeError}</p> : playbackSettings.autoplayNextEpisode && upNextCountdown > 0 ? <p className="mt-1 text-[9px] text-white/32">Playing in {upNextCountdown} seconds</p> : null}</div>
-              <button onClick={() => setUpNextCountdown(null)} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] text-white/45 hover:bg-white/[0.06]">Cancel</button>
-              <button onClick={() => void prepareNextEpisode(false)} className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-[10px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Play now</button>
-            </div>
-          )}
+            connectionStats={{
+              downloadSpeed: prog?.downloadSpeed ?? 0,
+              numPeers: prog?.numPeers ?? 0,
+              downloadedProgress: prog?.bufferProgress ?? 0
+            }}
+          >
+            {skippableChapter && (
+              <button
+                onClick={() => void restartPlaybackAt(skippableChapter.end, selectedAudioTrackIndex)}
+                className="absolute bottom-7 right-8 z-20 flex items-center gap-2 rounded-lg border border-white/20 bg-black/75 px-4 py-2 text-[11px] font-semibold text-white shadow-xl backdrop-blur hover:bg-white hover:text-black"
+              >
+                Skip {/(credits|ending|outro)/i.test(skippableChapter.title ?? '') ? 'credits' : 'intro'} <SkipForward className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {upNextCountdown !== null && streamDisplayMetadata?.nextEpisode && (
+              <div className="absolute inset-x-8 bottom-7 z-20 flex items-center gap-4 rounded-xl border border-white/15 bg-[#111416]/95 p-4 shadow-2xl backdrop-blur">
+                {streamDisplayMetadata.nextEpisode.stillUrl && <img src={streamDisplayMetadata.nextEpisode.stillUrl} alt="" className="h-16 w-28 rounded-lg object-cover" />}
+                <div className="min-w-0 flex-1"><p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-200/60">Up Next</p><p className="mt-1 truncate text-[12px] font-semibold text-white/80">{streamDisplayMetadata.absoluteEpisodeOnly && streamDisplayMetadata.nextEpisode.absoluteEpisodeNumber !== undefined ? `EP ${String(streamDisplayMetadata.nextEpisode.absoluteEpisodeNumber).padStart(3, '0')}` : `S${streamDisplayMetadata.nextEpisode.seasonNumber} E${streamDisplayMetadata.nextEpisode.episodeNumber}`} · {streamDisplayMetadata.nextEpisode.title}</p>{nextEpisodeError ? <p className="mt-1 text-[9px] text-red-200/65">{nextEpisodeError}</p> : playbackSettings.autoplayNextEpisode && upNextCountdown > 0 ? <p className="mt-1 text-[9px] text-white/32">Playing in {upNextCountdown} seconds</p> : null}</div>
+                <button onClick={() => setUpNextCountdown(null)} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] text-white/45 hover:bg-white/[0.06]">Cancel</button>
+                <button onClick={() => void prepareNextEpisode(false)} className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-[10px] font-semibold text-[#17191b]"><Play className="h-3 w-3 fill-current" /> Play now</button>
+              </div>
+            )}
+          </VideoPlayer>
           </>
         )}
       </div>

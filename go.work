@@ -1,7 +1,10 @@
-go 1.22
+go 1.26.0
 
 use (
 	./pkg
 	./services/auth
 	./services/content
+	./services/search
+	./services/torrent-daemon
+	./services/user
 )

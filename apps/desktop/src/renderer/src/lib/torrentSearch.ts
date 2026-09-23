@@ -4,7 +4,20 @@
  * report partial provider outages instead of silently showing no results.
  */
 
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
+export type TorrentProviderName =
+  | 'APIBay'
+  | 'Nyaa'
+  | 'AnimeTosho'
+  | 'TokyoTosho'
+  | 'SubsPlease'
+  | 'AniDex'
+  | 'YTS'
+  | 'EZTV'
+  | 'Knaben'
+  | 'Torznab'
+  | 'StremioAddon'
+  | 'InternetArchive'
+  | '1337x'
 
 export interface TorrentSearchResult {
   id: string
@@ -18,6 +31,7 @@ export interface TorrentSearchResult {
   added: string
   provider: TorrentProviderName
   qualityScore?: number
+  fileIndex?: number
 }
 
 export interface TorrentProviderStatus {

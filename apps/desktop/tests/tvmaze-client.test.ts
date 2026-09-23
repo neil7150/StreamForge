@@ -87,6 +87,33 @@ test('normalizes and sorts seasons and episodes while preserving specials', asyn
   assert.ok(episodes.every((episode) => episode.seasonNumber === 0 && episode.seasonId === 100))
 })
 
+test('converts year-numbered anime groups into usable season and absolute episode numbering', async () => {
+  const client = new TVMazeClient({
+    fetchImpl: async (input) => {
+      const url = String(input)
+      if (url.endsWith('/shows/1905/seasons')) {
+        return jsonResponse([
+          { id: 6969, number: 2004, episodeOrder: null, name: '#1 - #13', image: null },
+          { id: 176461, number: 2005, episodeOrder: null, name: '#14 - #62', image: null },
+          { id: 195570, number: 2026, episodeOrder: null, name: '#1156 -', image: null }
+        ])
+      }
+      return jsonResponse([
+        { id: 158370, season: 2005, number: 1, name: 'Back to Back, a Fight to the Death!', image: null }
+      ])
+    }
+  })
+
+  const seasons = await client.getSeasons(1905)
+  const episodes = await client.getSeasonEpisodes(176461)
+
+  assert.deepEqual(seasons.map((season) => season.number), [1, 2, 3])
+  assert.deepEqual(seasons.map((season) => season.episodeCount), [13, 49, null])
+  assert.deepEqual(seasons.map((season) => [season.absoluteEpisodeStart, season.absoluteEpisodeEnd]), [[1, 13], [14, 62], [1156, undefined]])
+  assert.equal(episodes[0]?.seasonNumber, 2)
+  assert.equal(episodes[0]?.episodeNumber, 1)
+})
+
 test('coalesces concurrent requests and serves later requests from cache', async () => {
   let calls = 0
   const client = new TVMazeClient({

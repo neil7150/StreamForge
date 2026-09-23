@@ -23,14 +23,14 @@ type Config struct {
 // Load reads configuration from environment variables with defaults.
 func Load() Config {
 	return Config{
-		Port:           getEnv("PORT", "8082"),
-		DatabaseURL:    getEnv("DATABASE_URL", "postgres://streamforge:streamforge@localhost:5432/content?sslmode=disable"),
+		Port:           getEnv("PORT", "8002"),
+		DatabaseURL:    getEnv("DATABASE_URL", "postgres://streamforge:streamforge_dev_password@localhost:5432/content_db?sslmode=disable"),
 		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379/1"),
 		AuthRedisURL:   getEnv("AUTH_REDIS_URL", "redis://localhost:6379/0"),
-		JWTSecret:      getEnv("JWT_SECRET", "dev-secret-change-in-production"),
+		JWTSecret:      getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
 		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", ""),
-		MinioSecretKey: getEnv("MINIO_SECRET_KEY", ""),
+		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "streamforge"),
+		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "streamforge_minio_password"),
 		AppEnv:         getEnv("APP_ENV", "development"),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 	}

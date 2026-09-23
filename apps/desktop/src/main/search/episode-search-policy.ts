@@ -4,8 +4,13 @@ export interface EpisodeTorrentSearchRequest {
   episodeNumber: number
   episodeTitle?: string
   imdbId?: string
+  seriesAliases?: string[]
+  absoluteEpisodeNumber?: number
+  absoluteEpisodeOnly?: boolean
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: Array<{ url: string; apiKey?: string }>
+  stremioAddonUrls?: string[]
 }
 
 function normalizeTitle(value: string): string {
@@ -13,7 +18,7 @@ function normalizeTitle(value: string): string {
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ')
 }
@@ -43,9 +48,10 @@ function releaseHasExactSeriesTitle(releaseName: string, seriesTitle: string): b
 
 function hasPackOrRangeIndicators(releaseName: string): boolean {
   const normalized = normalizeTitle(releaseName)
-  return /\b(?:complete season|season complete|season pack|full season|batch)\b/.test(normalized)
+  return /\b(?:complete season|season complete|season pack|full season|complete series|full series|complete collection|collection|batch)\b/.test(normalized)
     || /(?:s\d{1,3}[\s._-]*e|\d{1,3}x)\d{1,3}[\s._-]*[-~][\s._-]*(?:e)?\d{1,3}/i.test(releaseName)
     || /\bepisodes?[\s._-]*\d{1,3}[\s._-]*[-~][\s._-]*\d{1,3}\b/i.test(releaseName)
+    || /(?:^|[^0-9])\d{1,4}[\s._-]*[-~][\s._-]*\d{1,4}(?:$|[^0-9])/i.test(releaseName)
 }
 
 function standardEpisodeTokens(releaseName: string): Array<{ season: number; episode: number }> {
@@ -78,11 +84,113 @@ export function buildEpisodeSearchQuery(request: EpisodeTorrentSearchRequest): s
   return `${request.seriesTitle.trim()} S${season}E${episode}`
 }
 
+export function buildAnimeAbsoluteSearchQueries(request: EpisodeTorrentSearchRequest): string[] {
+  const epNum = request.absoluteEpisodeNumber ?? request.episodeNumber
+  if (!epNum || epNum <= 0) return []
+  const ep2 = String(epNum).padStart(2, '0')
+  const titles = [request.seriesTitle, ...(request.seriesAliases ?? [])]
+  const seen = new Set<string>()
+  const queries: string[] = []
+  for (const title of titles) {
+    const clean = title.replace(/\s*\((?:19|20|21)\d{2}\)/g, '').replace(/\s*\(TV\)/gi, '').trim()
+    const key = normalizeTitle(clean)
+    if (!clean || !key || seen.has(key)) continue
+    seen.add(key)
+    queries.push(`${clean} ${ep2}`)
+    if (queries.length >= 8) break
+  }
+  return queries.slice(0, 8)
+}
+
+export function buildAnimeBatchSearchQueries(request: EpisodeTorrentSearchRequest): string[] {
+  const titles = [request.seriesTitle, ...(request.seriesAliases ?? [])]
+  const seen = new Set<string>()
+  const queries: string[] = []
+  for (const title of titles) {
+    const clean = title.replace(/\s*\((?:19|20|21)\d{2}\)/g, '').replace(/\s*\(TV\)/gi, '').trim()
+    const key = normalizeTitle(clean)
+    if (!clean || !key || seen.has(key)) continue
+    seen.add(key)
+    queries.push(`${clean} batch`, `${clean} complete`)
+    if (queries.length >= 6) break
+  }
+  return queries.slice(0, 6)
+}
+
+function normalizeRemainderText(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\-~]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function normalizedRemainderAfterTitle(releaseName: string, title: string): string | null {
+  const withoutGroup = releaseName
+    .replace(/^(?:\s*\[[^\]]+\]|\([^)]{1,40}\)\s*)+/, '')
+    .replace(/^(?:www\.)?[a-z0-9.-]+\.(?:com|net|org)\s*[-_. ]+/i, '')
+  const normalizedRelease = normalizeRemainderText(withoutGroup)
+  const cleanTitle = title.replace(/\s*\((?:19|20|21)\d{2}\)/g, '').replace(/\s*\(TV\)/gi, '').trim()
+  const normalizedTitle = normalizeTitle(cleanTitle || title)
+  if (!normalizedTitle) return null
+  if (normalizedRelease.startsWith(`${normalizedTitle} `)) {
+    return normalizedRelease.slice(normalizedTitle.length).trim()
+  }
+  if (normalizedRelease.startsWith(normalizedTitle)) {
+    return normalizedRelease.slice(normalizedTitle.length).trim()
+  }
+  return null
+}
+
+function matchesAnimeBatch(releaseName: string, request: EpisodeTorrentSearchRequest): boolean {
+  const target = request.absoluteEpisodeNumber ?? (request.seasonNumber === 1 ? request.episodeNumber : undefined)
+  if (!target || !hasPackOrRangeIndicators(releaseName)) return false
+  const titles = [request.seriesTitle, ...(request.seriesAliases ?? [])]
+  return titles.some((title) => {
+    const remainder = normalizedRemainderAfterTitle(releaseName, title)
+    if (!remainder) return false
+    const withoutYear = remainder
+      .replace(/^(?:19|20)\d{2}\s+(?:(?:19|20)\d{2}\s+)?/, '')
+      .replace(/^anime\s+/, '')
+    if (!/^(?:(?:episodes?|eps?|ep)\s*)?\d|^(?:complete|full\s+series|batch|collection|s\d+)(?:\s|$)/.test(withoutYear)) {
+      return false
+    }
+    const ranges = [...withoutYear.matchAll(/(?:(?:episodes?|eps?|ep)\s*)?0*(\d{1,4})\s*(?:to|[-~])\s*0*(\d{1,4})(?:\s|$)/g)]
+      .map((match) => ({ start: Number(match[1]), end: Number(match[2]) }))
+      .filter((range) => range.start > 0 && range.end >= range.start)
+    if (ranges.length > 0) return ranges.some((range) => target >= range.start && target <= range.end)
+    return /^(?:complete(?:\s+(?:series|collection))?|full\s+series|batch|collection)(?:\s|$)/.test(withoutYear)
+  })
+}
+
+function matchesAbsoluteEpisode(releaseName: string, request: EpisodeTorrentSearchRequest): boolean {
+  if (!request.absoluteEpisodeOnly && standardEpisodeTokens(releaseName).length > 0) {
+    return false
+  }
+  const target = request.absoluteEpisodeNumber ?? (request.seasonNumber === 1 ? request.episodeNumber : undefined)
+  if (!target || hasPackOrRangeIndicators(releaseName)) return false
+  const titles = [request.seriesTitle, ...(request.seriesAliases ?? [])]
+  return titles.some((title) => {
+    const remainder = normalizedRemainderAfterTitle(releaseName, title)
+    if (remainder === null) return false
+    const match = remainder.match(/^(?:(?:e|ep|episode)\s*|\s*-\s*|\s*)0*(\d{1,4})(?:v\d+)?(?:\s|\(|$)/i)
+    return Number(match?.[1]) === target
+  })
+}
+
 export function matchesEpisodeRelease(
   releaseName: string,
   request: EpisodeTorrentSearchRequest
 ): boolean {
-  if (!releaseHasExactSeriesTitle(releaseName, request.seriesTitle)) return false
+  const absoluteMatch = matchesAbsoluteEpisode(releaseName, request)
+  const batchMatch = matchesAnimeBatch(releaseName, request)
+  if (request.absoluteEpisodeOnly) return absoluteMatch || batchMatch
+  if (absoluteMatch) return true
+  if (batchMatch) return true
+  const titles = [request.seriesTitle, ...(request.seriesAliases ?? [])]
+  if (!titles.some((title) => releaseHasExactSeriesTitle(releaseName, title))) return false
   if (hasPackOrRangeIndicators(releaseName)) return false
   const tokens = standardEpisodeTokens(releaseName)
   return tokens.length === 1

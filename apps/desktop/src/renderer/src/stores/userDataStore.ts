@@ -5,6 +5,8 @@
 
 import { create } from 'zustand'
 import { preserveHistoryMetadata } from '../lib/history-policy'
+import { api } from '../lib/api'
+import { useAuthStore } from './authStore'
 
 export interface WatchHistoryEntry {
   movieId: string
@@ -56,6 +58,8 @@ interface UserDataState {
   // Persistence
   _loadFromStorage: () => void
   _saveToStorage: () => void
+  syncToCloud: () => Promise<void>
+  syncFromCloud: () => Promise<void>
 }
 
 const STORAGE_KEY_WATCHLIST = 'streamforge_watchlist'
@@ -134,5 +138,94 @@ export const useUserDataStore = create<UserDataState>((set, get) => ({
     const { watchlist, history } = get()
     localStorage.setItem(STORAGE_KEY_WATCHLIST, JSON.stringify(watchlist))
     localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history))
+  },
+
+  syncToCloud: async () => {
+    const { isAuthenticated } = useAuthStore.getState()
+    if (!isAuthenticated) return
+    try {
+      const { watchlist, history } = get()
+      await api.syncWatchlist(watchlist.map((w) => ({
+        content_key: w.movieId,
+        title: w.title,
+        poster_url: w.poster,
+        metadata: { slug: w.slug, year: w.year, rating: w.rating, magnetURI: w.magnetURI }
+      })))
+      await api.syncHistory(history.map((h) => ({
+        content_key: h.contentKey || h.movieId,
+        title: h.title,
+        poster_url: h.poster,
+        progress: h.progress,
+        current_time: h.currentTime,
+        duration: h.duration,
+        metadata: { slug: h.slug, magnetURI: h.magnetURI, contentType: h.contentType, seriesTitle: h.seriesTitle, episodeTitle: h.episodeTitle, seasonNumber: h.seasonNumber, episodeNumber: h.episodeNumber }
+      })))
+    } catch {
+      // Silently ignore sync errors
+    }
+  },
+
+  syncFromCloud: async () => {
+    const { isAuthenticated } = useAuthStore.getState()
+    if (!isAuthenticated) return
+    try {
+      const [watchlistRes, historyRes] = await Promise.all([
+        api.getCloudWatchlist(),
+        api.getCloudHistory()
+      ])
+      const cloudWatchlist = watchlistRes?.data ?? []
+      const cloudHistory = historyRes?.data ?? []
+
+      if (cloudWatchlist.length > 0 || cloudHistory.length > 0) {
+        set((state) => {
+          // Merge watchlist: cloud items win, keep local-only items
+          const cloudWatchlistKeys = new Set(cloudWatchlist.map((w: any) => w.content_key))
+          const localOnly = state.watchlist.filter((w) => !cloudWatchlistKeys.has(w.movieId))
+          const mergedWatchlist = [
+            ...cloudWatchlist.map((w: any) => ({
+              movieId: w.content_key,
+              slug: w.metadata?.slug ?? w.content_key,
+              title: w.title ?? '',
+              poster: w.poster_url ?? '',
+              addedAt: new Date(w.added_at).getTime(),
+              year: w.metadata?.year ?? 0,
+              rating: w.metadata?.rating ?? 0,
+              magnetURI: w.metadata?.magnetURI ?? ''
+            })),
+            ...localOnly
+          ]
+
+          // Merge history: cloud items win, keep local-only items
+          const cloudHistoryKeys = new Set(cloudHistory.map((h: any) => h.content_key))
+          const localOnlyHistory = state.history.filter((h) => !cloudHistoryKeys.has(h.contentKey || h.movieId))
+          const mergedHistory = [
+            ...cloudHistory.map((h: any) => ({
+              movieId: h.content_key,
+              contentKey: h.content_key,
+              slug: h.metadata?.slug ?? h.content_key,
+              title: h.title ?? '',
+              poster: h.poster_url ?? '',
+              watchedAt: new Date(h.watched_at).getTime(),
+              progress: h.progress ?? 0,
+              currentTime: h.current_time,
+              duration: h.duration,
+              magnetURI: h.metadata?.magnetURI ?? '',
+              contentType: h.metadata?.contentType,
+              seriesTitle: h.metadata?.seriesTitle,
+              episodeTitle: h.metadata?.episodeTitle,
+              seasonNumber: h.metadata?.seasonNumber,
+              episodeNumber: h.metadata?.episodeNumber
+            })),
+            ...localOnlyHistory
+          ].slice(0, 50)
+
+          localStorage.setItem(STORAGE_KEY_WATCHLIST, JSON.stringify(mergedWatchlist))
+          localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(mergedHistory))
+          return { watchlist: mergedWatchlist, history: mergedHistory }
+        })
+      }
+    } catch {
+      // Silently ignore sync errors
+    }
   }
 }))

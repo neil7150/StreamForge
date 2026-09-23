@@ -10,6 +10,7 @@ export interface NextEpisodeMetadata {
   episodeNumber: number
   title: string
   stillUrl: string | null
+  absoluteEpisodeNumber?: number
 }
 
 export interface PlaybackDisplayMetadata {
@@ -21,6 +22,8 @@ export interface PlaybackDisplayMetadata {
   seriesId?: number
   seriesTitle?: string
   seriesImdbId?: string
+  seriesAliases?: string[]
+  absoluteEpisodeOnly?: boolean
   episodeId?: number
   seasonNumber?: number
   episodeNumber?: number
@@ -192,8 +195,17 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     const nextMetadata = displayMetadata && nextSource
       ? { ...displayMetadata, sourceIndex: currentIndex + 1 }
       : displayMetadata
+    const nextPreferredEpisode = preferredEpisode && nextSource
+      ? (() => {
+        const { fileIndex: _ignoredFileIndex, ...episodeIdentity } = preferredEpisode
+        return {
+          ...episodeIdentity,
+          ...(nextSource.fileIndex !== undefined ? { fileIndex: nextSource.fileIndex } : {})
+        }
+      })()
+      : preferredEpisode
     await get().cleanupStream(infoHash)
-    return get().addTorrent(nextSource?.magnetURI ?? magnetURI, preferredEpisode, nextMetadata)
+    return get().addTorrent(nextSource?.magnetURI ?? magnetURI, nextPreferredEpisode, nextMetadata)
   },
   // ─── Downloads (persistent) ──────────────────────────────────────
 

@@ -72,6 +72,9 @@ func main() {
 
 	movieHandler := handler.NewMovieHandler(contentSvc, log)
 	genreHandler := handler.NewGenreHandler(genreSvc, log)
+	showRepo := repository.NewShowRepository(pool)
+	showSvc := service.NewShowService(showRepo, genreRepo, magnetRepo, subtitleRepo, rdb, log)
+	showHandler := handler.NewShowHandler(showSvc, log)
 
 	// ── Create Fiber app ──────────────────────────────────
 	app := fiber.New(fiber.Config{
@@ -93,18 +96,15 @@ func main() {
 	})
 
 	pkgmw.Setup(app, log)
+	pkgmw.RegisterMetrics(app, "content")
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "content"})
 	})
-	app.Get("/metrics", func(c *fiber.Ctx) error {
-		c.Type("txt")
-		return c.SendString("# HELP streamforge_up Whether the service is running.\n# TYPE streamforge_up gauge\nstreamforge_up{service=\"content\"} 1\n")
-	})
 
 	// Register routes
-	handler.SetupRoutes(app, movieHandler, genreHandler, cfg.JWTSecret, tokenBlacklist)
+	handler.SetupRoutes(app, movieHandler, genreHandler, showHandler, cfg.JWTSecret, tokenBlacklist)
 
 	// ── Start server ──────────────────────────────────────
 	go func() {

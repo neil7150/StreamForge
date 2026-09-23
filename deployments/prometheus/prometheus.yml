@@ -12,3 +12,13 @@ scrape_configs:
     static_configs:
       - targets: ['content-service:8002']
     metrics_path: '/metrics'
+
+  - job_name: 'user-service'
+    static_configs:
+      - targets: ['user-service:8003']
+    metrics_path: '/metrics'
+
+  - job_name: 'search-service'
+    static_configs:
+      - targets: ['search-service:8004']
+    metrics_path: '/metrics'

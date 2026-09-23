@@ -95,6 +95,10 @@ function isTrustedNavigation(target: string, current: string): boolean {
  * Creates the main application window with a frameless, dark-themed design.
  */
 function createWindow(): BrowserWindow {
+  const windowIcon = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../../resources/icon.png')
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -102,6 +106,7 @@ function createWindow(): BrowserWindow {
     minHeight: 700,
     frame: false,
     titleBarStyle: 'hidden',
+    icon: windowIcon,
     backgroundColor: '#0a0a0f',
     show: false,
     webPreferences: {
@@ -155,6 +160,11 @@ app.whenReady().then(async () => {
   // 1. Initialize the cache manager (wipes stream cache from previous session)
   cacheManager = new CacheManager()
   await cacheManager.initialize()
+
+  // Clear default session's HTTP disk cache to wipe any leftover scraped
+  // torrent-site HTML from previous sessions (prevents Defender false positives)
+  await session.defaultSession.clearCache()
+  console.log('[Main] Cleared default session cache')
 
   // 2. Initialize the torrent manager (async — loads ESM WebTorrent module)
   torrentManager = new TorrentManager()

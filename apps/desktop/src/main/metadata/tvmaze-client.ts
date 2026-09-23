@@ -35,6 +35,8 @@ export interface SeasonSummary {
   network: string | null
   posterUrl: string | null
   summary: string | null
+  absoluteEpisodeStart?: number
+  absoluteEpisodeEnd?: number
 }
 
 export interface EpisodeSummary {
@@ -230,7 +232,42 @@ function normalizeSeason(value: unknown, seriesId: number): SeasonSummary | null
   }
 }
 
-function normalizeEpisode(value: unknown, seasonId: number): EpisodeSummary | null {
+function episodeRangeFromSeasonName(name: string | null): { start: number; end: number | null } | null {
+  const match = name?.match(/#\s*(\d{1,4})\s*[-–—](?:\s*#?\s*(\d{1,4}))?/)
+  if (!match) return null
+  const start = Number(match[1])
+  const end = match[2] ? Number(match[2]) : null
+  if (!Number.isSafeInteger(start) || start <= 0) return null
+  if (end !== null && (!Number.isSafeInteger(end) || end < start)) return null
+  return { start, end }
+}
+
+export function normalizeYearNumberedSeasons(seasons: SeasonSummary[]): SeasonSummary[] {
+  const sorted = [...seasons].sort((left, right) => left.number - right.number)
+  const regularSeasons = sorted.filter((season) => season.number > 0)
+  const usesYearGroups = regularSeasons.length > 0 && regularSeasons.every((season) => (
+    season.number >= 1900
+    && season.number <= 2100
+    && episodeRangeFromSeasonName(season.name) !== null
+  ))
+  if (!usesYearGroups) return sorted
+
+  let ordinal = 0
+  return sorted.map((season) => {
+    if (season.number === 0) return season
+    ordinal += 1
+    const range = episodeRangeFromSeasonName(season.name)!
+    return {
+      ...season,
+      number: ordinal,
+      episodeCount: range.end === null ? season.episodeCount : range.end - range.start + 1,
+      absoluteEpisodeStart: range.start,
+      ...(range.end === null ? {} : { absoluteEpisodeEnd: range.end })
+    }
+  })
+}
+
+function normalizeEpisode(value: unknown, seasonId: number, normalizedSeasonNumber?: number): EpisodeSummary | null {
   const episode = asRecord(value)
   if (!episode) return null
   const id = asPositiveInteger(episode.id)
@@ -241,7 +278,7 @@ function normalizeEpisode(value: unknown, seasonId: number): EpisodeSummary | nu
   return {
     id,
     seasonId,
-    seasonNumber,
+    seasonNumber: normalizedSeasonNumber ?? seasonNumber,
     episodeNumber: asPositiveInteger(episode.number),
     title,
     type: asString(episode.type),
@@ -268,6 +305,7 @@ export class TVMazeClient {
   private readonly now: () => number
   private readonly sleep: (milliseconds: number) => Promise<void>
   private readonly cache = new Map<string, CacheEntry<unknown>>()
+  private readonly normalizedSeasonNumberById = new Map<number, number>()
   private readonly inFlight = new Map<string, Promise<unknown>>()
 
   constructor(options: TVMazeClientOptions = {}) {
@@ -315,10 +353,12 @@ export class TVMazeClient {
     return this.cached(`seasons:${seriesId}`, CATALOG_CACHE_TTL_MS, async () => {
       const payload = await this.request(`/shows/${seriesId}/seasons`)
       if (!Array.isArray(payload)) throw new TVMazeClientError('TVmaze returned an invalid season response')
-      return payload.flatMap((value) => {
+      const seasons = normalizeYearNumberedSeasons(payload.flatMap((value) => {
         const normalized = normalizeSeason(value, seriesId)
         return normalized ? [normalized] : []
-      }).sort((left, right) => left.number - right.number)
+      }))
+      for (const season of seasons) this.normalizedSeasonNumberById.set(season.id, season.number)
+      return seasons
     })
   }
 
@@ -326,8 +366,9 @@ export class TVMazeClient {
     return this.cached(`episodes:${seasonId}`, CATALOG_CACHE_TTL_MS, async () => {
       const payload = await this.request(`/seasons/${seasonId}/episodes`)
       if (!Array.isArray(payload)) throw new TVMazeClientError('TVmaze returned an invalid episode response')
+      const normalizedSeasonNumber = this.normalizedSeasonNumberById.get(seasonId)
       return payload.flatMap((value) => {
-        const normalized = normalizeEpisode(value, seasonId)
+        const normalized = normalizeEpisode(value, seasonId, normalizedSeasonNumber)
         return normalized ? [normalized] : []
       }).sort((left, right) => (left.episodeNumber ?? Number.MAX_SAFE_INTEGER) - (right.episodeNumber ?? Number.MAX_SAFE_INTEGER))
     })

@@ -8,6 +8,7 @@ import {
 } from '../../lib/playback-seek'
 import type { VideoElementDiagnostics } from '../../lib/playback-diagnostics'
 import { findActiveSubtitleCue, parseSubtitles, type SubtitleCue } from '../../lib/subtitle-policy'
+import { formatSpeed } from '../../lib/utils'
 import {
   Play,
   Pause,
@@ -23,8 +24,10 @@ import {
   RotateCcw,
   RotateCw,
   Gauge,
+  Globe2,
   Keyboard,
-  PictureInPicture2
+  PictureInPicture2,
+  Users
 } from 'lucide-react'
 
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -56,6 +59,12 @@ export interface PlaybackSeekRequest {
   origin: 'timeline' | 'skip'
 }
 
+export interface StreamingConnectionStats {
+  downloadSpeed: number
+  numPeers: number
+  downloadedProgress: number
+}
+
 interface VideoPlayerProps {
   src: string
   durationOverride?: number | null
@@ -73,10 +82,12 @@ interface VideoPlayerProps {
   selectedAudioTrackIndex?: number | null
   onAudioTrackChange?: (trackIndex: number) => void | Promise<void>
   subtitleTracks?: SubtitleTrack[]
+  connectionStats?: StreamingConnectionStats
+  children?: React.ReactNode
 }
 
 
-// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ———————————————————————————————————————————— Helpers ——————————————————————————
 
 function formatTime(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '0:00'
@@ -139,7 +150,9 @@ export default function VideoPlayer({
   audioTracks = [],
   selectedAudioTrackIndex = null,
   onAudioTrackChange,
-  subtitleTracks = []
+  subtitleTracks = [],
+  connectionStats,
+  children
 }: VideoPlayerProps) {
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -182,6 +195,7 @@ export default function VideoPlayer({
   const [showAudioMenu, setShowAudioMenu] = useState(false)
   const [showSpeedMenu, setShowSpeedMenu] = useState(false)
   const [showShortcutHelp, setShowShortcutHelp] = useState(false)
+  const [showConnectionMenu, setShowConnectionMenu] = useState(false)
   const [isPictureInPicture, setIsPictureInPicture] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(() => loadStoredNumber(PLAYBACK_RATE_KEY, 1, 0.5, 2))
 
@@ -244,6 +258,7 @@ export default function VideoPlayer({
         setShowAudioMenu(false)
         setShowSpeedMenu(false)
         setShowShortcutHelp(false)
+        setShowConnectionMenu(false)
         setShowVolumeSlider(false)
       }
     }, CONTROLS_HIDE_DELAY)
@@ -262,6 +277,7 @@ export default function VideoPlayer({
         setShowAudioMenu(false)
         setShowSpeedMenu(false)
         setShowShortcutHelp(false)
+        setShowConnectionMenu(false)
         setShowVolumeSlider(false)
       }, 800)
     }
@@ -529,7 +545,7 @@ export default function VideoPlayer({
       const requestedTime = pendingSeekTimeRef.current
       // The previous source can continue emitting events while the main process
       // reprioritizes pieces and creates the replacement URL. Do not let those
-      // events snap the timeline or rolling torrent window back to the old time.
+      // events snap the timeline or torrent priority back to the old time.
       if (requestedTime !== null && !isPlaybackTimeAtRequestedSeek(absoluteTime, requestedTime)) {
         const resolvedDuration = sourceDuration ?? (Number.isFinite(video.duration) ? video.duration : 0)
         setDuration(resolvedDuration)
@@ -798,11 +814,13 @@ export default function VideoPlayer({
         case '?':
           e.preventDefault()
           setShowShortcutHelp((visible) => !visible)
+          setShowConnectionMenu(false)
           resetHideTimer()
           break
         case 'Escape':
           setShowShortcutHelp(false)
           setShowSpeedMenu(false)
+          setShowConnectionMenu(false)
           if (document.fullscreenElement) {
             document.exitFullscreen()
           }
@@ -928,6 +946,9 @@ export default function VideoPlayer({
   // â”€â”€â”€ Derived Values â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const progressPct = effectiveDuration > 0 ? (currentTime / effectiveDuration) * 100 : 0
+  const downloadedPercentage = Math.round(
+    clamp(connectionStats?.downloadedProgress ?? 0, 0, 1) * 100
+  )
   const bufferedSegments = effectiveDuration > 0
     ? bufferedRanges.map((range) => ({
         left: clamp(range.start / effectiveDuration * 100, 0, 100),
@@ -1002,7 +1023,13 @@ export default function VideoPlayer({
             showControls ? 'bottom-24' : 'bottom-8'
           )}
         >
-          <span className="rounded-md bg-black/75 px-4 py-2 text-center leading-relaxed text-white backdrop-blur-sm" style={{ fontSize: `${subtitleScale}rem` }}>
+          <span
+            className="px-4 py-2 text-center leading-relaxed text-white"
+            style={{
+              fontSize: `${subtitleScale}rem`,
+              textShadow: '0 2px 4px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 1)'
+            }}
+          >
             {activeCue.text.split('\n').map((line, i) => (
               <span key={i}>
                 {i > 0 && <br />}
@@ -1012,6 +1039,9 @@ export default function VideoPlayer({
           </span>
         </div>
       )}
+
+      {/* External overlays (skip intro, up-next, etc.) */}
+      {children}
 
       {/* Controls Overlay */}
       <div
@@ -1158,6 +1188,59 @@ export default function VideoPlayer({
           {/* Spacer */}
           <div className="flex-1" />
 
+          {/* Streaming connection */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowConnectionMenu((visible) => !visible)
+                setShowAudioMenu(false)
+                setShowSubMenu(false)
+                setShowSpeedMenu(false)
+                setShowShortcutHelp(false)
+              }}
+              className={clsx(
+                'flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10 hover:text-white',
+                showConnectionMenu ? 'text-[var(--color-accent)]' : 'text-white/70'
+              )}
+              title="Streaming connection"
+              aria-label="Streaming connection details"
+              aria-expanded={showConnectionMenu}
+            >
+              <Globe2 className="h-5 w-5" />
+            </button>
+
+            {showConnectionMenu && (
+              <div className="absolute bottom-12 right-0 w-64 overflow-hidden rounded-xl bg-black/90 shadow-xl backdrop-blur-xl">
+                <div className="border-b border-white/10 px-4 py-2.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-white/50">Streaming connection</p>
+                  <p className="mt-1 text-[10px] text-white/35">Live torrent activity</p>
+                </div>
+                <dl className="space-y-3 px-4 py-3 text-xs">
+                  <div className="flex items-center justify-between gap-4">
+                    <dt className="text-white/50">Download speed</dt>
+                    <dd className="font-mono text-white/90">{formatSpeed(connectionStats?.downloadSpeed ?? 0)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <dt className="flex items-center gap-1.5 text-white/50"><Users className="h-3.5 w-3.5" /> Peers</dt>
+                    <dd className="font-mono text-white/90">{connectionStats?.numPeers ?? 0}</dd>
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-4">
+                      <dt className="text-white/50">Video downloaded</dt>
+                      <dd className="font-mono text-white/90">{downloadedPercentage}%</dd>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-white/15">
+                      <div
+                        className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-500"
+                        style={{ width: `${downloadedPercentage}%` }}
+                      />
+                    </div>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </div>
+
           {/* Audio Tracks */}
           {audioTracks.length > 1 && (
             <div className="relative">
@@ -1167,6 +1250,7 @@ export default function VideoPlayer({
                   setShowSubMenu(false)
                   setShowSpeedMenu(false)
                   setShowShortcutHelp(false)
+                  setShowConnectionMenu(false)
                 }}
                 className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 transition-colors duration-200 hover:bg-white/10 hover:text-white"
                 title="Audio track"
@@ -1224,6 +1308,7 @@ export default function VideoPlayer({
                 setShowAudioMenu(false)
                 setShowSpeedMenu(false)
                 setShowShortcutHelp(false)
+                setShowConnectionMenu(false)
               }}
               className={clsx(
                 'flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10',
@@ -1347,6 +1432,7 @@ export default function VideoPlayer({
                 setShowAudioMenu(false)
                 setShowSubMenu(false)
                 setShowShortcutHelp(false)
+                setShowConnectionMenu(false)
               }}
               className="flex h-9 min-w-9 items-center justify-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-white/70 transition-colors hover:bg-white/10 hover:text-white"
               title="Playback speed (< or >)"
@@ -1402,6 +1488,7 @@ export default function VideoPlayer({
                 setShowSpeedMenu(false)
                 setShowAudioMenu(false)
                 setShowSubMenu(false)
+                setShowConnectionMenu(false)
               }}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 transition-colors duration-200 hover:bg-white/10 hover:text-white"
               title="Keyboard shortcuts (?)"

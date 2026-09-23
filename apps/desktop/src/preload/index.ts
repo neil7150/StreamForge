@@ -98,6 +98,9 @@ const torrentAPI = {
   getSeasonEpisodes: (seasonId: number): Promise<EpisodeSummary[]> =>
     ipcRenderer.invoke('catalog:get-season-episodes', seasonId),
 
+  getAnimeSearchMetadata: (title: string): Promise<AnimeSearchMetadata | null> =>
+    ipcRenderer.invoke('catalog:get-anime-search-metadata', title),
+
   searchMovies: (query: string): Promise<MovieSummary[]> =>
     ipcRenderer.invoke('catalog:search-movies', query),
 
@@ -158,6 +161,10 @@ export interface QueuedDownloadResult {
 export interface PreferredEpisodeFile {
   seasonNumber: number
   episodeNumber: number
+  fileIndex?: number
+  absoluteEpisodeNumber?: number
+  absoluteEpisodeOnly?: boolean
+  seriesTitles?: string[]
 }
 
 export interface MediaAudioTrack {
@@ -199,7 +206,7 @@ export interface MediaChapter {
   title: string | null
 }
 
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
+export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'AnimeTosho' | 'TokyoTosho' | 'YTS' | 'EZTV' | 'Knaben' | 'Torznab' | 'StremioAddon' | 'InternetArchive'
 
 export interface TorrentSearchResult {
   id: string
@@ -213,6 +220,7 @@ export interface TorrentSearchResult {
   added: string
   provider: TorrentProviderName
   qualityScore?: number
+  fileIndex?: number
 }
 
 export interface TorrentProviderStatus {
@@ -238,8 +246,13 @@ export interface EpisodeTorrentSearchRequest {
   episodeNumber: number
   episodeTitle?: string
   imdbId?: string
+  seriesAliases?: string[]
+  absoluteEpisodeNumber?: number
+  absoluteEpisodeOnly?: boolean
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: Array<{ url: string; apiKey?: string }>
+  stremioAddonUrls?: string[]
 }
 
 export interface MovieTorrentSearchRequest {
@@ -248,6 +261,8 @@ export interface MovieTorrentSearchRequest {
   imdbId?: string
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: Array<{ url: string; apiKey?: string }>
+  stremioAddonUrls?: string[]
 }
 
 export interface OnlineSubtitleSearchRequest {
@@ -302,6 +317,8 @@ export interface SeasonSummary {
   network: string | null
   posterUrl: string | null
   summary: string | null
+  absoluteEpisodeStart?: number
+  absoluteEpisodeEnd?: number
 }
 
 export interface EpisodeSummary {
@@ -317,6 +334,11 @@ export interface EpisodeSummary {
   stillUrl: string | null
   summary: string | null
   tvmazeUrl: string | null
+}
+
+export interface AnimeSearchMetadata {
+  aliases: string[]
+  episodeCount: number | null
 }
 
 export interface MovieSummary {

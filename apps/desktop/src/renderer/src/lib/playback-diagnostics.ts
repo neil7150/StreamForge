@@ -1,4 +1,4 @@
-﻿import type { MediaInfo, TorrentInfo, TorrentProgress } from '../../../preload/index.d'
+import type { MediaInfo, TorrentInfo, TorrentProgress } from '../../../preload/index.d'
 
 export interface PlaybackBufferedRange { start: number; end: number }
 
@@ -45,7 +45,7 @@ export interface PlaybackDiagnosticsInput {
 export interface PlaybackDiagnosticsReport {
   schemaVersion: 1
   generatedAt: string
-  app: { name: 'StreamForge'; version: '0.1.0'; platform: string }
+  app: { name: 'StreamForge'; version: '1.1.0'; platform: string }
   connection: ConnectionDiagnostics & { elapsedMs: number; phaseElapsedMs: number }
   torrent: {
     infoHash: string; name: string | null; ready: boolean; mode: string | null
@@ -79,7 +79,7 @@ export function buildPlaybackDiagnosticsReport(input: PlaybackDiagnosticsInput, 
   return {
     schemaVersion: 1,
     generatedAt: new Date(now).toISOString(),
-    app: { name: 'StreamForge', version: '0.1.0', platform: input.userAgent || 'unknown' },
+    app: { name: 'StreamForge', version: '1.1.0', platform: input.userAgent || 'unknown' },
     connection: {
       ...input.connection,
       elapsedMs: Math.max(0, now - input.connection.startedAt),

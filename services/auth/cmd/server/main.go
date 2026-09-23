@@ -21,6 +21,7 @@ import (
 	"streamforge.local/pkg/middleware"
 	"streamforge/services/auth/internal/config"
 	"streamforge/services/auth/internal/handler"
+	"streamforge/services/auth/internal/mailer"
 	"streamforge/services/auth/internal/repository"
 	"streamforge/services/auth/internal/service"
 )
@@ -64,6 +65,17 @@ func main() {
 	// ── Build dependencies ──────────────────────────────────────────────
 	userRepo := repository.NewUserRepository(pool)
 	tokenRepo := repository.NewTokenRepository(redisClient)
+	oauthRepo := repository.NewOAuthRepository(pool)
+
+	mailCfg := mailer.Config{
+		Host:   cfg.SMTPHost,
+		Port:   cfg.SMTPPort,
+		User:   cfg.SMTPUser,
+		Pass:   cfg.SMTPPass,
+		From:   cfg.SMTPFrom,
+		AppEnv: cfg.AppEnv,
+	}
+	appMailer := mailer.NewMailer(mailCfg, log)
 
 	jwtCfg := auth.JWTConfig{
 		Secret:     cfg.JWTSecret,
@@ -72,8 +84,11 @@ func main() {
 		Issuer:     "streamforge-auth",
 	}
 
-	authService := service.NewAuthService(userRepo, tokenRepo, jwtCfg, log)
+	authService := service.NewAuthService(userRepo, tokenRepo, appMailer, jwtCfg, log)
 	authHandler := handler.NewAuthHandler(authService, log)
+
+	oauthService := service.NewOAuthService(cfg, userRepo, oauthRepo, tokenRepo, jwtCfg, log)
+	oauthHandler := handler.NewOAuthHandler(oauthService, cfg.FrontendURL, log)
 
 	// ── Create Fiber app ────────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
@@ -84,8 +99,9 @@ func main() {
 		DisableStartupMessage: cfg.IsProd(),
 	})
 
-	// Apply standard middleware
+	// Apply standard middleware and live Prometheus metrics
 	middleware.Setup(app, log)
+	middleware.RegisterMetrics(app, "auth")
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -95,13 +111,9 @@ func main() {
 			"time":    time.Now().UTC(),
 		})
 	})
-	app.Get("/metrics", func(c *fiber.Ctx) error {
-		c.Type("txt")
-		return c.SendString("# HELP streamforge_up Whether the service is running.\n# TYPE streamforge_up gauge\nstreamforge_up{service=\"auth\"} 1\n")
-	})
 
 	// Register auth routes
-	handler.SetupRoutes(app, authHandler, cfg.JWTSecret, tokenRepo)
+	handler.SetupRoutes(app, authHandler, oauthHandler, cfg.JWTSecret, tokenRepo)
 
 	// ── Graceful shutdown ───────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)

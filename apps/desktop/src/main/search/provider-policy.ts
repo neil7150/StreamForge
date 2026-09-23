@@ -1,9 +1,31 @@
-export type TorrentProviderName = 'APIBay' | 'Nyaa' | 'YTS' | 'EZTV' | 'Torznab'
+export type TorrentProviderName =
+  | 'APIBay'
+  | 'Nyaa'
+  | 'AnimeTosho'
+  | 'TokyoTosho'
+  | 'SubsPlease'
+  | 'AniDex'
+  | 'YTS'
+  | 'EZTV'
+  | 'Knaben'
+  | 'Torznab'
+  | 'StremioAddon'
+  | 'InternetArchive'
+  | '1337x'
+
+export interface TorznabEndpoint {
+  url: string
+  apiKey?: string
+}
 
 export interface SourceProviderConfig {
   imdbId?: string
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: TorznabEndpoint[]
+  stremioAddonUrls?: string[]
+  seasonNumber?: number
+  episodeNumber?: number
 }
 
 export interface TorrentSearchResult {
@@ -18,6 +40,7 @@ export interface TorrentSearchResult {
   added: string
   provider: TorrentProviderName
   qualityScore?: number
+  fileIndex?: number
 }
 
 export interface TorrentProviderStatus {
@@ -40,13 +63,25 @@ export interface TorrentSearchResponse {
 const INFO_HASH_PATTERN = /^[a-fA-F0-9]{40}$/
 
 export const TRACKERS = [
-  // TCP-based fallbacks are important on networks that block UDP/DHT.
+  // Tier-1 High-Uptime Public BitTorrent Trackers (ngosang / newTrackon curated)
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.tracker.cl:1337/announce',
+  'udp://9.rarbg.com:2810/announce',
+  'udp://tracker.openbittorrent.com:6969/announce',
+  'udp://tracker.openbittorrent.com:80/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://tracker.tiny-vps.com:6969/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.moeking.me:6969/announce',
+  'udp://explodie.org:6969/announce',
+  'udp://tracker.dler.org:6969/announce',
+  // HTTP / HTTPS Fallback Trackers
+  'https://tracker.gbitt.info/announce',
   'http://tracker.bt4g.com:2095/announce',
   'http://tracker.qu.ax:6969/announce',
   'http://tracker2.dler.org:80/announce',
-  'udp://tracker.opentrackr.org:1337/announce',
-  'udp://tracker.openbittorrent.com:80/announce',
-  'udp://explodie.org:6969/announce',
+  // WebTorrent / WebRTC Hybrid Trackers
   'wss://tracker.webtorrent.dev:443',
   'wss://tracker.openwebtorrent.com:443',
   'wss://open.ftorrent.com:443',
@@ -66,7 +101,11 @@ export function appendFallbackTrackers(magnetURI: string): string {
   for (const tracker of TRACKERS) {
     if (!existing.has(tracker)) magnet.searchParams.append('tr', tracker)
   }
+  // URLSearchParams percent-encodes the colons in `urn:btih:`. The magnet-uri
+  // parser used by WebTorrent expects this exact topic prefix to remain literal.
   return magnet.toString()
+    .replace(/([?&]xt=)urn%3Abtih%3A/gi, '$1urn:btih:')
+    .replace(/([?&]xt=)urn%3Abtmh%3A/gi, '$1urn:btmh:')
 }
 
 export function normalizeInfoHash(value: unknown): string | null {
@@ -77,6 +116,15 @@ export function normalizeInfoHash(value: unknown): string | null {
 
 export function extractInfoHashFromMagnet(value: unknown): string | null {
   if (typeof value !== 'string') return null
+  try {
+    const magnet = new URL(value)
+    const exactTopic = magnet.searchParams.getAll('xt')
+      .find((topic) => topic.toLowerCase().startsWith('urn:btih:'))
+    const parsedHash = normalizeInfoHash(exactTopic?.slice('urn:btih:'.length))
+    if (parsedHash) return parsedHash
+  } catch {
+    // Fall through to the tolerant raw-string matcher.
+  }
   const match = value.match(/(?:^|[?&])xt=urn:btih:([a-fA-F0-9]{40})(?:&|$)/i)
   return normalizeInfoHash(match?.[1])
 }
@@ -133,11 +181,12 @@ export function sourceQualityScore(result: TorrentSearchResult): number {
   const seedScore = Math.log10(Math.max(1, result.seeders) + 1) * 30
   const ratioScore = Math.min(20, result.seeders / Math.max(1, result.leechers + 1) * 2)
   const categoryBonus = /movie|video|tv|anime/i.test(result.category) ? 8 : 0
-  const resolutionBonus = /1080p/.test(name) ? 10 : /2160p|4k/.test(name) ? 8 : /720p/.test(name) ? 5 : 0
+  const resolutionBonus = /1080p|fhd/.test(name) ? 14 : /2160p|4k|uhd/.test(name) ? 12 : /720p|hd/.test(name) ? 8 : 0
   const directPlayBonus = /h\.?264|x264|avc/.test(name) && /aac|mp3|opus/.test(name) ? 14 : 0
-  const compatibilityPenalty = /hevc|h\.?265|x265|ac3|eac3|dts/.test(name) ? 6 : 0
+  const releaseBonus = /web[- .]?dl|webrip|bluray|blu-ray/i.test(name) ? 10 : 0
+  const camPenalty = /\b(cam|hd-cam|camrip|telesync|ts|hdts|telecine|tc|screener|scr|dvdscr|r5)\b/i.test(name) ? 100 : 0
   const deadPenalty = result.seeders === 0 ? 50 : 0
-  return Math.round(seedScore + ratioScore + categoryBonus + resolutionBonus + directPlayBonus - compatibilityPenalty - deadPenalty)
+  return Math.round(seedScore + ratioScore + categoryBonus + resolutionBonus + directPlayBonus + releaseBonus - camPenalty - deadPenalty)
 }
 
 /** Order sources by swarm availability, using quality only to break seed-count ties. */

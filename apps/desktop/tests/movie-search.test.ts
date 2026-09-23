@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { TorrentSearchResult } from '../src/main/search/provider-policy.ts'
+import type { TorrentProviderName, TorrentSearchResult } from '../src/main/search/provider-policy.ts'
 import { buildMovieSearchQuery, matchesMovieRelease } from '../src/main/search/movie-search-policy.ts'
 
-function result(name: string, provider: 'APIBay' | 'Nyaa' | 'YTS' = 'APIBay', added = ''): TorrentSearchResult {
+function result(name: string, provider: TorrentProviderName = 'APIBay', added = ''): TorrentSearchResult {
   return { id: name, name, provider, added, magnetURI: '', seeders: 1, leechers: 0, size: '1 GB', sizeBytes: 1, category: 'Movies' }
 }
 
@@ -18,12 +18,14 @@ test('matches exact movie title and year across providers', () => {
   assert.equal(matchesMovieRelease(result('The Arrival [1080p]', 'YTS', '1996'), request), true)
   assert.equal(matchesMovieRelease(result('The.Arrival.2016.1080p'), request), false)
   assert.equal(matchesMovieRelease(result('Arrival.1996.1080p'), request), false)
+  assert.equal(matchesMovieRelease(result('The Arrival', 'InternetArchive', '1996'), request), true)
 })
 
 test('rejects television episodes from movie results', () => {
   const request = { title: 'Example', year: 2020 }
   assert.equal(matchesMovieRelease(result('Example.2020.S01E02.1080p'), request), false)
   assert.equal(matchesMovieRelease(result('Example.2020.1x02.720p'), request), false)
+  assert.equal(matchesMovieRelease(result('Example 2020 Official Trailer 1080p'), request), false)
 })
 
 test('normalizes punctuation and protects short titles', () => {

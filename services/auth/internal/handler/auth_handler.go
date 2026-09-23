@@ -158,6 +158,57 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	return response.OK(c, resp)
 }
 
+// RequestVerification handles POST /auth/verify-email/request (requires authentication).
+func (h *AuthHandler) RequestVerification(c *fiber.Ctx) error {
+	userID, ok := c.Locals("userID").(uuid.UUID)
+	if !ok {
+		return response.Unauthorized(c, "Invalid authentication")
+	}
+
+	token, err := h.authService.RequestEmailVerification(c.Context(), userID)
+	if err != nil {
+		if errors.Is(err, service.ErrEmailAlreadyVerified) {
+			return response.Conflict(c, "Email is already verified")
+		}
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return response.NotFound(c, "User not found")
+		}
+		h.logger.Error().Err(err).Msg("request verification failed")
+		return response.InternalError(c, "Failed to generate verification token")
+	}
+
+	return response.OK(c, fiber.Map{
+		"verification_token": token,
+		"message":            "Verification token generated. In production, this would be sent to your email.",
+	})
+}
+
+// VerifyEmail handles POST /auth/verify-email.
+func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
+	var req dto.VerifyEmailRequest
+	if err := c.BodyParser(&req); err != nil {
+		h.logger.Warn().Err(err).Msg("invalid verify email request body")
+		return response.BadRequest(c, "Invalid request body")
+	}
+
+	if err := h.validate.Struct(req); err != nil {
+		h.logger.Warn().Err(err).Msg("verify email validation failed")
+		return response.BadRequest(c, formatValidationErrors(err))
+	}
+
+	if err := h.authService.VerifyEmail(c.Context(), req.Token); err != nil {
+		if errors.Is(err, service.ErrInvalidVerificationToken) {
+			return response.BadRequest(c, "Invalid or expired verification token")
+		}
+		h.logger.Error().Err(err).Msg("verify email failed")
+		return response.InternalError(c, "Failed to verify email")
+	}
+
+	return response.OK(c, fiber.Map{
+		"message": "Email verified successfully",
+	})
+}
+
 // formatValidationErrors converts validator errors to a human-readable message.
 func formatValidationErrors(err error) string {
 	var validationErrors validator.ValidationErrors

@@ -1,6 +1,10 @@
 export interface PreferredEpisodeFile {
   seasonNumber: number
   episodeNumber: number
+  fileIndex?: number
+  absoluteEpisodeNumber?: number
+  absoluteEpisodeOnly?: boolean
+  seriesTitles?: string[]
 }
 
 export interface TorrentFileCandidate {
@@ -49,16 +53,55 @@ function episodeTokens(value: string): Array<{ season: number; episode: number }
   return tokens
 }
 
+function normalizeTitle(value: string): string {
+  return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ')
+}
+
+function matchesAbsoluteEpisode(fileName: string, preferred: PreferredEpisodeFile): boolean {
+  if (!preferred.absoluteEpisodeNumber || !preferred.seriesTitles?.length) return false
+  if (/(?:^|[^0-9])\d{1,4}[\s._-]*[-~][\s._-]*\d{1,4}(?:$|[^0-9])/i.test(fileName)) return false
+  const withoutGroups = fileName.replace(/^(?:\s*\[[^\]]+\]\s*)+/, '').replace(/\.[a-z0-9]+$/i, '')
+  const normalized = normalizeTitle(withoutGroups)
+  return preferred.seriesTitles.some((title) => {
+    const normalizedTitle = normalizeTitle(title)
+    if (!normalizedTitle || !normalized.startsWith(`${normalizedTitle} `)) return false
+    const remainder = normalized.slice(normalizedTitle.length).trim()
+    const match = remainder.match(/^(?:(?:e|ep|episode)\s*)?0*(\d{1,4})(?:v\d+)?(?:\s|$)/i)
+    return Number(match?.[1]) === preferred.absoluteEpisodeNumber
+  })
+}
+
+function matchesBareAbsoluteEpisode(fileName: string, preferred: PreferredEpisodeFile): boolean {
+  if (!preferred.absoluteEpisodeOnly || !preferred.absoluteEpisodeNumber) return false
+  if (/(?:^|[^0-9])\d{1,4}[\s._-]*[-~][\s._-]*\d{1,4}(?:$|[^0-9])/i.test(fileName)) return false
+  const withoutGroupOrExtension = fileName
+    .replace(/^(?:\s*\[[^\]]+\]\s*)+/, '')
+    .replace(/\.[a-z0-9]+$/i, '')
+  const normalized = normalizeTitle(withoutGroupOrExtension)
+  const match = normalized.match(/^(?:(?:e|ep|episode)\s*)?0*(\d{1,4})(?:v\d+)?(?:\s|$)/i)
+  return Number(match?.[1]) === preferred.absoluteEpisodeNumber
+}
+
 export function findPreferredEpisodeFile(
   files: TorrentFileCandidate[],
   preferred: PreferredEpisodeFile
 ): EpisodeFileMatch {
+  if (preferred.fileIndex !== undefined) {
+    const exactFile = files[preferred.fileIndex]
+    if (exactFile && VIDEO_EXTENSIONS.has(extension(exactFile.name))) {
+      return { status: 'matched', fileIndex: preferred.fileIndex, candidateIndexes: [preferred.fileIndex] }
+    }
+  }
   const candidateIndexes = files.flatMap((file, index) => {
     if (!VIDEO_EXTENSIONS.has(extension(file.name))) return []
     const searchablePath = `${file.path ?? ''}/${file.name}`
-    const matches = episodeTokens(searchablePath).some((token) => (
+    const standardMatch = !preferred.absoluteEpisodeOnly && episodeTokens(searchablePath).some((token) => (
       token.season === preferred.seasonNumber && token.episode === preferred.episodeNumber
     ))
+    const matches = standardMatch
+      || matchesAbsoluteEpisode(file.name, preferred)
+      || matchesBareAbsoluteEpisode(file.name, preferred)
     return matches ? [index] : []
   })
 

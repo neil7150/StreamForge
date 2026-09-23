@@ -149,6 +149,18 @@ func (r *UserRepository) LockAccount(ctx context.Context, id uuid.UUID, until ti
 	return nil
 }
 
+// MarkEmailVerified updates the email_verified flag to true for a user.
+func (r *UserRepository) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark email verified: %w", err)
+	}
+	return nil
+}
+
 // isDuplicateKeyError checks if the error is a PostgreSQL unique violation (23505).
 func isDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError

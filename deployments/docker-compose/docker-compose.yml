@@ -77,6 +77,38 @@ services:
     ports: ["8002:8002"]
     networks: [streamforge]
 
+  user-service:
+    build:
+      context: ../../
+      dockerfile: services/user/Dockerfile
+    environment:
+      APP_ENV: development
+      PORT: "8003"
+      DATABASE_URL: postgres://${POSTGRES_USER:-streamforge}:${POSTGRES_PASSWORD:-streamforge_dev_password}@postgres:5432/user_db?sslmode=disable
+      REDIS_URL: redis://redis:6379/2
+      AUTH_REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["8003:8003"]
+    networks: [streamforge]
+
+  search-service:
+    build:
+      context: ../../
+      dockerfile: services/search/Dockerfile
+    environment:
+      APP_ENV: development
+      PORT: "8004"
+      DATABASE_URL: postgres://${POSTGRES_USER:-streamforge}:${POSTGRES_PASSWORD:-streamforge_dev_password}@postgres:5432/content_db?sslmode=disable
+      REDIS_URL: redis://redis:6379/3
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["8004:8004"]
+    networks: [streamforge]
+
   # ─── API Gateway ────────────────────────────────────────
   nginx:
     image: nginx:alpine
@@ -84,7 +116,7 @@ services:
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../nginx/conf.d:/etc/nginx/conf.d:ro
     ports: ["8080:80"]
-    depends_on: [auth-service, content-service]
+    depends_on: [auth-service, content-service, user-service, search-service]
     networks: [streamforge]
 
   # ─── Monitoring ─────────────────────────────────────────

@@ -349,7 +349,7 @@ export function mightNeedTranscoding(fileName: string): boolean {
  * Spawn an ffmpeg process that transcodes a video file to fragmented MP4
  * (H.264 + AAC) and streams the output via stdout.
  *
- * @param input - Disk path or local rolling HTTP source
+ * @param input - Disk path or local torrent-backed HTTP source
  * @param probe - Probe result to decide what to transcode
  * @param seekSeconds - Optional: start from this time position (for seeking)
  * @param realtimeInput - Pace torrent reads close to playback speed
@@ -376,7 +376,7 @@ export function createTranscodeStream(
 
   if (realtimeInput) {
     // Build enough browser-side media buffer for instant 10-second skips, then
-    // return to native playback rate so the rolling torrent window stays bounded.
+    // return to native playback rate so transcoding does not outrun playback.
     args.push('-readrate', '1', '-readrate_initial_burst', '15')
   }
 

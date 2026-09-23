@@ -1,7 +1,9 @@
-﻿import { useEffect } from 'react'
+import { useEffect } from 'react'
 import { Routes, Route, useLocation } from 'react-router-dom'
 import TitleBar from './components/ui/TitleBar'
 import Sidebar from './components/ui/Sidebar'
+import CommandPalette from './components/ui/CommandPalette'
+import ShortcutsOverlay from './components/ui/ShortcutsOverlay'
 import Home from './pages/Home'
 import Browse from './pages/Browse'
 import MovieDetail from './pages/MovieDetail'
@@ -12,8 +14,11 @@ import History from './pages/History'
 import Downloads from './pages/Downloads'
 import Player from './pages/Player'
 import Settings from './pages/Settings'
+import Admin from './pages/Admin'
 import { useTorrentEvents } from './hooks/useTorrent'
 import { useAppStore } from './stores/appStore'
+import { useAuthStore } from './stores/authStore'
+import { useUserDataStore } from './stores/userDataStore'
 
 export default function App() {
   useTorrentEvents()
@@ -21,6 +26,21 @@ export default function App() {
   const refreshCacheSize = useAppStore((state) => state.refreshCacheSize)
   const location = useLocation()
   const isPlayer = location.pathname.startsWith('/player/')
+  const loadSession = useAuthStore((state) => state.loadSession)
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const syncToCloud = useUserDataStore((state) => state.syncToCloud)
+
+  useEffect(() => {
+    loadSession()
+  }, [loadSession])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+    const interval = setInterval(() => {
+      syncToCloud().catch(() => {})
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [isAuthenticated, syncToCloud])
 
   useEffect(() => {
     refreshCacheSize()
@@ -31,6 +51,8 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[var(--color-bg-primary)]">
       <TitleBar />
+      <CommandPalette />
+      <ShortcutsOverlay />
       <div className="flex min-h-0 flex-1">
         {!isPlayer && <Sidebar />}
         <main className="min-w-0 flex-1 overflow-hidden">
@@ -46,6 +68,7 @@ export default function App() {
               <Route path="/downloads" element={<Downloads />} />
               <Route path="/player/:infoHash" element={<Player />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/admin" element={<Admin />} />
             </Routes>
           </div>
         </main>

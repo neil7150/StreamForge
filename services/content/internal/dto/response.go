@@ -269,3 +269,86 @@ func ToSubtitleResponse(s model.Subtitle) SubtitleResponse {
 		IsDefault:    s.IsDefault,
 	}
 }
+
+// ToShowResponse converts a Show model to a summary API response DTO.
+func ToShowResponse(s model.Show) ShowResponse {
+	return ShowResponse{
+		ID:           s.ID,
+		Title:        s.Title,
+		Slug:         s.Slug,
+		Overview:     s.Overview,
+		FirstAirDate: s.FirstAirDate,
+		Language:     s.Language,
+		PosterURL:    s.PosterURL,
+		SeasonCount:  s.SeasonCount,
+		EpisodeCount: s.EpisodeCount,
+		Status:       s.Status,
+		LicenseType:  s.LicenseType,
+		AvgRating:    s.AvgRating,
+		ViewCount:    s.ViewCount,
+		Genres:       ToGenreResponses(s.Genres),
+		CreatedAt:    s.CreatedAt,
+	}
+}
+
+// ToShowDetailResponse converts a Show model to a full detail API response DTO.
+func ToShowDetailResponse(s model.Show) ShowDetailResponse {
+	seasons := make([]SeasonResponse, len(s.Seasons))
+	for i, season := range s.Seasons {
+		seasons[i] = ToSeasonResponse(season)
+	}
+	return ShowDetailResponse{
+		ID:           s.ID,
+		Title:        s.Title,
+		Slug:         s.Slug,
+		Overview:     s.Overview,
+		FirstAirDate: s.FirstAirDate,
+		LastAirDate:  s.LastAirDate,
+		Language:     s.Language,
+		PosterURL:    s.PosterURL,
+		BackdropURL:  s.BackdropURL,
+		SeasonCount:  s.SeasonCount,
+		EpisodeCount: s.EpisodeCount,
+		Status:       s.Status,
+		LicenseType:  s.LicenseType,
+		LicenseURL:   s.LicenseURL,
+		AvgRating:    s.AvgRating,
+		RatingCount:  s.RatingCount,
+		ViewCount:    s.ViewCount,
+		Genres:       ToGenreResponses(s.Genres),
+		Seasons:      seasons,
+		CreatedAt:    s.CreatedAt,
+		UpdatedAt:    s.UpdatedAt,
+	}
+}
+
+// ToSeasonResponse converts a Season model to its API response DTO.
+func ToSeasonResponse(s model.Season) SeasonResponse {
+	episodes := make([]EpisodeResponse, len(s.Episodes))
+	for i, ep := range s.Episodes {
+		episodes[i] = ToEpisodeResponse(ep)
+	}
+	return SeasonResponse{
+		ID:           s.ID,
+		SeasonNumber: s.SeasonNumber,
+		Title:        s.Title,
+		Overview:     s.Overview,
+		PosterURL:    s.PosterURL,
+		AirDate:      s.AirDate,
+		EpisodeCount: s.EpisodeCount,
+		Episodes:     episodes,
+	}
+}
+
+// ToEpisodeResponse converts an Episode model to its API response DTO.
+func ToEpisodeResponse(e model.Episode) EpisodeResponse {
+	return EpisodeResponse{
+		ID:             e.ID,
+		EpisodeNumber:  e.EpisodeNumber,
+		Title:          e.Title,
+		Overview:       e.Overview,
+		RuntimeMinutes: e.RuntimeMinutes,
+		AirDate:        e.AirDate,
+		StillURL:       e.StillURL,
+	}
+}

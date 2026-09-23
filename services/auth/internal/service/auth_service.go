@@ -17,6 +17,7 @@ import (
 
 	"streamforge.local/pkg/auth"
 	"streamforge/services/auth/internal/dto"
+	"streamforge/services/auth/internal/mailer"
 	"streamforge/services/auth/internal/model"
 	"streamforge/services/auth/internal/repository"
 )
@@ -36,16 +37,19 @@ const (
 
 // Common service errors.
 var (
-	ErrInvalidCredentials = errors.New("invalid email or password")
-	ErrAccountLocked      = errors.New("account is temporarily locked due to too many failed attempts")
-	ErrAccountInactive    = errors.New("account is inactive")
-	ErrInvalidToken       = errors.New("invalid or expired refresh token")
+	ErrInvalidCredentials       = errors.New("invalid email or password")
+	ErrAccountLocked            = errors.New("account is temporarily locked due to too many failed attempts")
+	ErrAccountInactive          = errors.New("account is inactive")
+	ErrInvalidToken             = errors.New("invalid or expired refresh token")
+	ErrEmailAlreadyVerified     = errors.New("email is already verified")
+	ErrInvalidVerificationToken = errors.New("invalid or expired verification token")
 )
 
 // AuthService handles authentication business logic.
 type AuthService struct {
 	userRepo  *repository.UserRepository
 	tokenRepo *repository.TokenRepository
+	mailer    *mailer.Mailer
 	jwtCfg    auth.JWTConfig
 	logger    zerolog.Logger
 }
@@ -54,12 +58,14 @@ type AuthService struct {
 func NewAuthService(
 	userRepo *repository.UserRepository,
 	tokenRepo *repository.TokenRepository,
+	mailer *mailer.Mailer,
 	jwtCfg auth.JWTConfig,
 	logger zerolog.Logger,
 ) *AuthService {
 	return &AuthService{
 		userRepo:  userRepo,
 		tokenRepo: tokenRepo,
+		mailer:    mailer,
 		jwtCfg:    jwtCfg,
 		logger:    logger.With().Str("component", "auth_service").Logger(),
 	}
@@ -244,6 +250,54 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*dt
 
 	resp := dto.ToUserResponse(user)
 	return &resp, nil
+}
+
+// RequestEmailVerification generates a verification token and stores it in Redis with 24h TTL.
+func (s *AuthService) RequestEmailVerification(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user.EmailVerified {
+		return "", ErrEmailAlreadyVerified
+	}
+
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("generate verification token: %w", err)
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	if err := s.tokenRepo.StoreVerificationToken(ctx, token, userID, 24*time.Hour); err != nil {
+		return "", fmt.Errorf("store verification token: %w", err)
+	}
+
+	if s.mailer != nil {
+		go func(email, tok string) {
+			if err := s.mailer.SendVerificationEmail(email, tok); err != nil {
+				s.logger.Error().Err(err).Str("email", email).Msg("failed to dispatch verification email")
+			}
+		}(user.Email, token)
+	}
+
+	s.logger.Info().Str("user_id", userID.String()).Msg("email verification token generated and email dispatched")
+	return token, nil
+}
+
+// VerifyEmail verifies a user's email address using the provided token.
+func (s *AuthService) VerifyEmail(ctx context.Context, token string) error {
+	userID, err := s.tokenRepo.GetVerificationUserID(ctx, token)
+	if err != nil {
+		return ErrInvalidVerificationToken
+	}
+
+	if err := s.userRepo.MarkEmailVerified(ctx, userID); err != nil {
+		return fmt.Errorf("mark email verified: %w", err)
+	}
+
+	_ = s.tokenRepo.DeleteVerificationToken(ctx, token)
+	s.logger.Info().Str("user_id", userID.String()).Msg("email verified successfully")
+	return nil
 }
 
 // generateAuthResponse creates access and refresh tokens and returns an AuthResponse.

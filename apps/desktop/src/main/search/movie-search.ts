@@ -17,9 +17,10 @@ function isVideoResult(result: TorrentSearchResult): boolean {
 export async function searchMovieTorrentProviders(
   request: MovieTorrentSearchRequest
 ): Promise<TorrentSearchResponse> {
+  const torznabEnabled = Boolean(request.torznabEndpoints?.length || request.torznabUrl)
   const response = await searchTorrentProviders(
     buildMovieSearchQuery(request),
-    ['APIBay', 'Nyaa', 'YTS', ...(request.torznabUrl ? ['Torznab' as const] : [])],
+    ['YTS', '1337x', 'APIBay', 'Nyaa', 'InternetArchive', ...(torznabEnabled ? ['Torznab' as const] : [])],
     request
   )
   const results = response.results.filter((result) => (

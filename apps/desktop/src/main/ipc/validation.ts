@@ -11,6 +11,8 @@ function requireOptionalSourceConfig(request: Record<string, unknown>): {
   imdbId?: string
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: Array<{ url: string; apiKey?: string }>
+  stremioAddonUrls?: string[]
 } {
   let imdbId: string | undefined
   if (request.imdbId !== undefined && request.imdbId !== null && request.imdbId !== '') {
@@ -40,10 +42,56 @@ function requireOptionalSourceConfig(request: Record<string, unknown>): {
     }
     torznabApiKey = request.torznabApiKey.trim() || undefined
   }
+
+  let torznabEndpoints: Array<{ url: string; apiKey?: string }> | undefined
+  if (request.torznabEndpoints !== undefined && request.torznabEndpoints !== null) {
+    if (!Array.isArray(request.torznabEndpoints) || request.torznabEndpoints.length > 8) {
+      throw new TypeError('Invalid Torznab endpoints')
+    }
+    torznabEndpoints = request.torznabEndpoints.map((value) => {
+      if (typeof value !== 'object' || value === null) throw new TypeError('Invalid Torznab endpoint')
+      const endpoint = value as Record<string, unknown>
+      if (typeof endpoint.url !== 'string' || endpoint.url.length > 2048) {
+        throw new TypeError('Invalid Torznab URL')
+      }
+      let parsed: URL
+      try { parsed = new URL(endpoint.url.trim()) } catch { throw new TypeError('Invalid Torznab URL') }
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) {
+        throw new TypeError('Invalid Torznab URL')
+      }
+      let apiKey: string | undefined
+      if (endpoint.apiKey !== undefined && endpoint.apiKey !== null && endpoint.apiKey !== '') {
+        if (typeof endpoint.apiKey !== 'string' || endpoint.apiKey.length > 512) {
+          throw new TypeError('Invalid Torznab API key')
+        }
+        apiKey = endpoint.apiKey.trim() || undefined
+      }
+      return { url: parsed.toString(), ...(apiKey ? { apiKey } : {}) }
+    })
+  }
+
+  let stremioAddonUrls: string[] | undefined
+  if (request.stremioAddonUrls !== undefined && request.stremioAddonUrls !== null) {
+    if (!Array.isArray(request.stremioAddonUrls) || request.stremioAddonUrls.length > 8) {
+      throw new TypeError('Invalid Stremio addon URLs')
+    }
+    stremioAddonUrls = request.stremioAddonUrls.map((value) => {
+      if (typeof value !== 'string' || value.length > 2048) throw new TypeError('Invalid Stremio addon URL')
+      let parsed: URL
+      try { parsed = new URL(value.trim()) } catch { throw new TypeError('Invalid Stremio addon URL') }
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) {
+        throw new TypeError('Invalid Stremio addon URL')
+      }
+      if (!/\/manifest\.json\/?$/i.test(parsed.pathname)) throw new TypeError('Stremio addon URL must end in manifest.json')
+      return parsed.toString()
+    })
+  }
   return {
     ...(imdbId ? { imdbId } : {}),
     ...(torznabUrl ? { torznabUrl } : {}),
-    ...(torznabApiKey ? { torznabApiKey } : {})
+    ...(torznabApiKey ? { torznabApiKey } : {}),
+    ...(torznabEndpoints?.length ? { torznabEndpoints } : {}),
+    ...(stremioAddonUrls?.length ? { stremioAddonUrls } : {})
   }
 }
 
@@ -96,7 +144,32 @@ export function requirePreferredEpisodeFile(value: unknown): PreferredEpisodeFil
   if (typeof episodeNumber !== 'number' || !Number.isSafeInteger(episodeNumber) || episodeNumber < 1 || episodeNumber > 999) {
     throw new TypeError('Invalid preferred episode number')
   }
-  return { seasonNumber, episodeNumber }
+  let fileIndex: number | undefined
+  if (request.fileIndex !== undefined) fileIndex = requireFileIndex(request.fileIndex)
+  let absoluteEpisodeNumber: number | undefined
+  if (request.absoluteEpisodeNumber !== undefined) {
+    if (typeof request.absoluteEpisodeNumber !== 'number' || !Number.isSafeInteger(request.absoluteEpisodeNumber)
+      || request.absoluteEpisodeNumber < 1 || request.absoluteEpisodeNumber > 9999) {
+      throw new TypeError('Invalid preferred absolute episode number')
+    }
+    absoluteEpisodeNumber = request.absoluteEpisodeNumber
+  }
+  if (request.absoluteEpisodeOnly === true && absoluteEpisodeNumber === undefined) {
+    throw new TypeError('Absolute-only episode selection requires an absolute episode number')
+  }
+  let seriesTitles: string[] | undefined
+  if (request.seriesTitles !== undefined) {
+    if (!Array.isArray(request.seriesTitles) || request.seriesTitles.length > 12) throw new TypeError('Invalid preferred series titles')
+    seriesTitles = request.seriesTitles.map((title) => requireSearchQuery(title))
+  }
+  return {
+    seasonNumber,
+    episodeNumber,
+    ...(fileIndex !== undefined ? { fileIndex } : {}),
+    ...(absoluteEpisodeNumber ? { absoluteEpisodeNumber } : {}),
+    ...(request.absoluteEpisodeOnly === true ? { absoluteEpisodeOnly: true } : {}),
+    ...(seriesTitles ? { seriesTitles } : {})
+  }
 }
 
 export function requireFiniteNumber(
@@ -157,7 +230,30 @@ export function requireEpisodeSearchRequest(value: unknown): EpisodeTorrentSearc
     episodeTitle = normalizedTitle || undefined
   }
 
-  return { seriesTitle, seasonNumber, episodeNumber, episodeTitle, ...requireOptionalSourceConfig(request) }
+  let seriesAliases: string[] | undefined
+  if (request.seriesAliases !== undefined) {
+    if (!Array.isArray(request.seriesAliases) || request.seriesAliases.length > 12) throw new TypeError('Invalid series aliases')
+    seriesAliases = request.seriesAliases.map((alias) => requireSearchQuery(alias))
+  }
+  let absoluteEpisodeNumber: number | undefined
+  if (request.absoluteEpisodeNumber !== undefined) {
+    if (typeof request.absoluteEpisodeNumber !== 'number' || !Number.isSafeInteger(request.absoluteEpisodeNumber)
+      || request.absoluteEpisodeNumber < 1 || request.absoluteEpisodeNumber > 9999) {
+      throw new TypeError('Invalid absolute episode number')
+    }
+    absoluteEpisodeNumber = request.absoluteEpisodeNumber
+  }
+  if (request.absoluteEpisodeOnly === true && absoluteEpisodeNumber === undefined) {
+    throw new TypeError('Absolute-only episode search requires an absolute episode number')
+  }
+
+  return {
+    seriesTitle, seasonNumber, episodeNumber, episodeTitle,
+    ...(seriesAliases ? { seriesAliases } : {}),
+    ...(absoluteEpisodeNumber ? { absoluteEpisodeNumber } : {}),
+    ...(request.absoluteEpisodeOnly === true ? { absoluteEpisodeOnly: true } : {}),
+    ...requireOptionalSourceConfig(request)
+  }
 }
 
 export function requireMovieSearchRequest(value: unknown): MovieTorrentSearchRequest {

@@ -1,77 +1,107 @@
 const MIB = 1024 * 1024
 
-export const RETAINED_BEHIND_SECONDS = 15
-export const MIN_AHEAD_SECONDS = 45
-export const MAX_AHEAD_SECONDS = 90
 export const FALLBACK_STARTUP_BUFFER_BYTES = 16 * MIB
 
-const MIN_STARTUP_BUFFER_BYTES = 8 * MIB
+const MIN_STARTUP_BUFFER_BYTES = 4 * MIB
 const MAX_STARTUP_BUFFER_BYTES = 64 * MIB
-const STARTUP_SECONDS = 15
+const FAST_SPEED_THRESHOLD_BYTES = 4 * MIB // > 4 MB/s (approx 35-40 Mbps)
+const LOW_SPEED_THRESHOLD_BYTES = 1 * MIB // < 1 MB/s
+
 export const STARTUP_CRITICAL_BYTES = 8 * MIB
 export const METADATA_TAIL_BYTES = 2 * MIB
+export const DEFAULT_LOOKAHEAD_SECONDS = 30
 
 export interface PieceRange {
   start: number
   end: number
 }
 
-export interface StreamWindowPolicyInput {
-  fileLength: number
-  duration: number
-  currentTime: number
-  downloadSpeed: number
-  recentlyStalled?: boolean
-}
-
-export interface StreamWindowPolicy {
-  startByte: number
-  endByte: number
-  bytesPerSecond: number
-  aheadSeconds: number
-  behindSeconds: number
-}
-
 export function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value))
 }
 
-export function calculateAheadSeconds(
-  downloadSpeed: number,
-  bytesPerSecond: number,
-  recentlyStalled = false
-): number {
-  if (recentlyStalled || bytesPerSecond <= 0 || downloadSpeed <= 0) {
-    return MAX_AHEAD_SECONDS
+/** Select every piece intersecting the chosen video so seeking can reuse it. */
+export function calculateFullFilePieceRange(
+  fileOffset: number,
+  fileLength: number,
+  pieceLength: number
+): PieceRange | null {
+  if (fileOffset < 0 || fileLength <= 0 || pieceLength <= 0) return null
+  return {
+    start: Math.floor(fileOffset / pieceLength),
+    end: Math.floor((fileOffset + fileLength - 1) / pieceLength)
   }
-
-  const headroom = downloadSpeed / bytesPerSecond
-  if (headroom >= 2.5) return MIN_AHEAD_SECONDS
-  if (headroom >= 1.5) return 60
-  return MAX_AHEAD_SECONDS
 }
 
-/** Prefer a longer startup reserve so normal peer-speed variation does not interrupt playback. */
-export function calculateStartupBufferBytes(bytesPerSecond?: number): number {
-  if (!bytesPerSecond || !Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
-    return FALLBACK_STARTUP_BUFFER_BYTES
+/**
+ * Adaptive startup buffer:
+ * - When real-time download speed is high (> 4 MB/s), startup window drops to 4MB for instant playback start.
+ * - When download speed is normal (1-4 MB/s), startup buffer scales with video bitrate (8-16MB).
+ * - When download speed is slow (< 1 MB/s), startup buffer increases up to 32MB to prevent immediate stuttering.
+ */
+export function calculateAdaptiveStartupBufferBytes(
+  downloadSpeed: number = 0,
+  mediaBytesPerSecond?: number
+): number {
+  if (downloadSpeed >= FAST_SPEED_THRESHOLD_BYTES) {
+    // Fast swarm: minimal safety buffer needed for instantaneous startup
+    const target = mediaBytesPerSecond && mediaBytesPerSecond > 0 ? mediaBytesPerSecond * 4 : 4 * MIB
+    return Math.round(clamp(target, MIN_STARTUP_BUFFER_BYTES, 12 * MIB))
   }
-  return Math.round(clamp(
-    bytesPerSecond * STARTUP_SECONDS,
-    MIN_STARTUP_BUFFER_BYTES,
-    MAX_STARTUP_BUFFER_BYTES
-  ))
+
+  if (downloadSpeed > 0 && downloadSpeed < LOW_SPEED_THRESHOLD_BYTES) {
+    // Slow swarm: build a deeper reserve to prevent buffering within seconds of start
+    const target = mediaBytesPerSecond && mediaBytesPerSecond > 0 ? mediaBytesPerSecond * 25 : 24 * MIB
+    return Math.round(clamp(target, 12 * MIB, MAX_STARTUP_BUFFER_BYTES))
+  }
+
+  // Balanced default
+  if (mediaBytesPerSecond && Number.isFinite(mediaBytesPerSecond) && mediaBytesPerSecond > 0) {
+    return Math.round(clamp(mediaBytesPerSecond * 15, 8 * MIB, MAX_STARTUP_BUFFER_BYTES))
+  }
+
+  return FALLBACK_STARTUP_BUFFER_BYTES
+}
+
+/** Legacy signature fallback wrapper */
+export function calculateStartupBufferBytes(bytesPerSecond?: number): number {
+  return calculateAdaptiveStartupBufferBytes(0, bytesPerSecond)
 }
 
 /** Limit urgent startup requests by bytes instead of torrent piece count. */
 export function calculateStartupCriticalEndPiece(
   startPiece: number,
   selectedEndPiece: number,
-  pieceLength: number
+  pieceLength: number,
+  criticalBytes: number = STARTUP_CRITICAL_BYTES
 ): number {
   const safePieceLength = Math.max(1, Math.floor(pieceLength))
-  const criticalPieceCount = Math.max(1, Math.ceil(STARTUP_CRITICAL_BYTES / safePieceLength))
+  const criticalPieceCount = Math.max(1, Math.ceil(criticalBytes / safePieceLength))
   return Math.min(selectedEndPiece, startPiece + criticalPieceCount - 1)
+}
+
+/**
+ * Calculates a lookahead piece range ahead of the current playhead byte.
+ * Allows WebTorrent to aggressively prefetch the next 30-45 seconds of video.
+ */
+export function calculateStreamingLookaheadPieceRange(
+  fileOffset: number,
+  fileLength: number,
+  pieceLength: number,
+  currentByte: number,
+  bytesPerSecond?: number,
+  lookaheadSeconds: number = DEFAULT_LOOKAHEAD_SECONDS
+): PieceRange | null {
+  if (fileLength <= 0 || pieceLength <= 0 || currentByte < 0) return null
+
+  const safeRate = bytesPerSecond && bytesPerSecond > 0 ? bytesPerSecond : (fileLength / 5400) // assume 90 min video fallback
+  const lookaheadBytes = Math.max(16 * MIB, Math.round(safeRate * lookaheadSeconds))
+  const startByte = Math.max(0, Math.min(fileLength - 1, currentByte))
+  const endByte = Math.min(fileLength - 1, startByte + lookaheadBytes)
+
+  const start = Math.floor((fileOffset + startByte) / pieceLength)
+  const end = Math.floor((fileOffset + endByte) / pieceLength)
+  return { start, end }
 }
 
 /** Select only file-tail pieces that are not covered by the startup window. */
@@ -89,24 +119,4 @@ export function calculateMetadataTailPieceRange(
     ? tailStartPiece
     : Math.max(tailStartPiece, selectedEndPiece + 1)
   return start <= fileEndPiece ? { start, end: fileEndPiece } : null
-}
-
-export function calculateStreamWindow(input: StreamWindowPolicyInput): StreamWindowPolicy {
-  const fileLength = Math.max(1, Math.floor(input.fileLength))
-  const duration = Math.max(0.001, input.duration)
-  const currentTime = clamp(input.currentTime, 0, duration)
-  const bytesPerSecond = fileLength / duration
-  const aheadSeconds = calculateAheadSeconds(
-    input.downloadSpeed,
-    bytesPerSecond,
-    input.recentlyStalled
-  )
-
-  return {
-    startByte: Math.floor(Math.max(0, currentTime - RETAINED_BEHIND_SECONDS) * bytesPerSecond),
-    endByte: Math.ceil(Math.min(duration, currentTime + aheadSeconds) * bytesPerSecond),
-    bytesPerSecond,
-    aheadSeconds,
-    behindSeconds: RETAINED_BEHIND_SECONDS
-  }
 }

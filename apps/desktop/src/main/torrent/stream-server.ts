@@ -147,8 +147,6 @@ export class StreamServer {
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = req.url || '/'
 
-    console.log(`[StreamServer] ${req.method} ${url} (Range: ${req.headers.range || 'none'})`)
-
 
     // Internal seekable source used by FFprobe/FFmpeg.
     const sourceMatch = url.match(/^\/source\/([a-fA-F0-9]{40})/)
@@ -208,7 +206,7 @@ export class StreamServer {
     res.end(JSON.stringify({ error: 'Not found' }))
   }
 
-  // Internal rolling source
+  // Internal torrent-backed source
 
   private handleSourceStream(
     req: http.IncomingMessage,
@@ -453,22 +451,10 @@ export class StreamServer {
         return
       }
 
-      // A video element often asks for the complete remainder of the file.
-      // Cap normal reads to the rolling playhead window. MP4 files may first
-      // ask for metadata near the end, so permit a small bounded range there;
-      // file.createReadStream then prioritizes exactly those missing pieces.
-      const streamWindow = fileIndex === undefined
-        ? this.torrentManager.getStreamWindow(infoHash)
-        : null
-      const startInsideWindow = !!streamWindow
-        && start >= streamWindow.start
-        && start <= streamWindow.end
-      const readableEnd = startInsideWindow
-        ? streamWindow!.end
-        : streamWindow
-          ? Math.min(fileSize - 1, start + OUT_OF_WINDOW_RANGE_BYTES - 1)
-          : fileSize - 1
-      const end = Math.min(requestedEnd, readableEnd, fileSize - 1)
+      // The complete selected file remains active in the torrent. A range read
+      // raises urgency around the requested position without dropping pieces
+      // already downloaded elsewhere in the video.
+      const end = Math.min(requestedEnd, fileSize - 1)
 
       const chunkSize = end - start + 1
       res.writeHead(206, {
@@ -484,17 +470,8 @@ export class StreamServer {
       })
       stream.pipe(res)
     } else {
-      const streamWindow = fileIndex === undefined
-        ? this.torrentManager.getStreamWindow(infoHash)
-        : null
-      // Use a bounded response even for clients that omit Range headers.
-      const end = streamWindow?.end ?? Math.min(fileSize - 1, 12 * 1024 * 1024)
-      const chunkSize = end + 1
-      res.writeHead(206, {
-        'Content-Range': `bytes 0-${end}/${fileSize}`,
-        'Content-Length': chunkSize
-      })
-      const stream = file.createReadStream({ start: 0, end })
+      res.writeHead(200, { 'Content-Length': fileSize })
+      const stream = file.createReadStream({ start: 0, end: fileSize - 1 })
       stream.on('error', (err: Error) => {
         console.error(`[StreamServer] Stream error for ${infoHash}:`, err.message)
         if (!res.headersSent) res.writeHead(500)

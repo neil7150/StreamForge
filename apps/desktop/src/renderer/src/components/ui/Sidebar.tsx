@@ -1,9 +1,10 @@
-﻿import { NavLink, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Download, Settings, Circle } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router-dom'
+import { Home, Search, Library, Download, Settings, Circle, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import { useTorrentStore } from '../../stores/torrentStore'
+import { useAuthStore } from '../../stores/authStore'
 
-const navItems = [
+const baseNavItems = [
   { label: 'Home', path: '/', icon: Home },
   { label: 'Discover', path: '/search', icon: Search },
   { label: 'Library', path: '/history', icon: Library },
@@ -14,8 +15,13 @@ const navItems = [
 export default function Sidebar() {
   const downloads = useTorrentStore((state) => state.downloads)
   const streams = useTorrentStore((state) => state.streams)
+  const user = useAuthStore((state) => state.user)
   const location = useLocation()
   const activeCount = downloads.size + streams.size
+
+  const navItems = user?.role === 'admin'
+    ? [...baseNavItems.slice(0, 4), { label: 'Admin', path: '/admin', icon: Shield }, baseNavItems[4]]
+    : baseNavItems
 
   return (
     <aside className="flex w-[196px] shrink-0 flex-col border-r border-white/[0.06] bg-[#111315] px-3 py-4">

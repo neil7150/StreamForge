@@ -178,7 +178,7 @@ export function setupTorrentIPC(
       }
     }
   )
-  /** Update the rolling stream window from the video playhead. */
+  /** Prioritize the active playhead while the full selected video downloads. */
   ipcMain.handle(
     'torrent:playback-position',
     async (_event, infoHash: string, currentTime: number, duration: number) => {

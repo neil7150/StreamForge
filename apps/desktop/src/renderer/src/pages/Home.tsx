@@ -1,6 +1,7 @@
-﻿import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowRight, Circle, X } from 'lucide-react'
+import clsx from 'clsx'
 import SmartSearchInput from '../components/ui/SmartSearchInput'
 import StreamArtwork from '../components/ui/StreamArtwork'
 import { useTorrentStore, type PlaybackDisplayMetadata } from '../stores/torrentStore'
@@ -42,6 +43,9 @@ export default function Home() {
 
   const activeStreams = Array.from(streams.values())
   const recentHistory = history.slice(0, 6)
+  const continueWatchingItem = history.find(
+    (entry) => entry.progress > 0.02 && entry.progress < 0.95 && (Boolean(entry.magnetURI) || streams.has(entry.movieId))
+  )
 
   const resume = (movieId: string, magnetURI: string, displayMetadata: PlaybackDisplayMetadata) => {
     if (streams.has(movieId)) navigate('/player/' + movieId)
@@ -58,9 +62,84 @@ export default function Home() {
           </span>
         </header>
 
-        <section className="mx-auto max-w-[760px] py-16 text-center">
+        {continueWatchingItem && (
+          <section className="relative mt-6 overflow-hidden rounded-2xl border border-white/[0.1] bg-[#141619] shadow-xl">
+            {continueWatchingItem.poster && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <img
+                  src={continueWatchingItem.poster}
+                  alt=""
+                  className="absolute -top-10 -right-10 h-full w-[60%] object-cover opacity-20 blur-2xl"
+                />
+                <div className="absolute inset-0 bg-gradient-to-r from-[#141619] via-[#141619]/90 to-transparent" />
+              </div>
+            )}
+            <div className="relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 p-6">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="relative h-20 w-32 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-black/40">
+                  <StreamArtwork
+                    title={continueWatchingItem.title}
+                    imageUrl={continueWatchingItem.poster}
+                    className="h-full w-full object-cover"
+                    showPlay
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1 rounded bg-teal-400/10 px-2 py-0.5 text-[9px] font-semibold text-teal-300">
+                      <Circle className="h-1.5 w-1.5 fill-teal-300" /> Jump Back In
+                    </span>
+                    {continueWatchingItem.seriesTitle && (
+                      <span className="text-[10px] text-white/40">
+                        {continueWatchingItem.seriesTitle}
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="mt-1.5 truncate text-[16px] font-semibold text-white/95">
+                    {continueWatchingItem.title}
+                  </h2>
+                  <div className="mt-2.5 flex items-center gap-3">
+                    <div className="h-1.5 w-36 overflow-hidden rounded-full bg-white/[0.08]">
+                      <div
+                        className="h-full bg-teal-300 transition-all duration-300"
+                        style={{ width: `${Math.round(continueWatchingItem.progress * 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-white/40 font-medium">
+                      {Math.round(continueWatchingItem.progress * 100)}% watched
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <button
+                  onClick={() =>
+                    resume(continueWatchingItem.movieId, continueWatchingItem.magnetURI, {
+                      title: continueWatchingItem.title,
+                      posterUrl: continueWatchingItem.poster || null,
+                      contentKey: continueWatchingItem.contentKey,
+                      contentType: continueWatchingItem.contentType,
+                      catalogId: continueWatchingItem.catalogId,
+                      seriesId: continueWatchingItem.seriesId,
+                      seriesTitle: continueWatchingItem.seriesTitle,
+                      episodeId: continueWatchingItem.episodeId,
+                      seasonNumber: continueWatchingItem.seasonNumber,
+                      episodeNumber: continueWatchingItem.episodeNumber,
+                      episodeTitle: continueWatchingItem.episodeTitle
+                    })
+                  }
+                  className="flex h-10 items-center gap-2 rounded-xl bg-white px-5 text-[12px] font-semibold text-[#141619] shadow-lg transition-transform hover:scale-[1.02] hover:bg-white/90 active:scale-[0.98]"
+                >
+                  <ArrowRight className="h-4 w-4" /> Resume Playback
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className={clsx('mx-auto max-w-[760px] text-center', continueWatchingItem ? 'py-10' : 'py-16')}>
           <h2 className="text-[36px] font-semibold tracking-[-0.045em] text-white">What do you want to watch?</h2>
-          <p className="mx-auto mt-3 max-w-xl text-[12px] leading-5 text-white/38">Search available video sources or paste a magnet link.</p>
+          <p className="mt-3 max-w-xl text-[12px] leading-5 text-white/38 mx-auto">Search available video sources or paste a magnet link.</p>
           <div className="mt-7 text-left">
             <SmartSearchInput onMagnet={handleMagnet} onSearch={handleSearch} isLoading={isLoading} error={error} autoFocus searchPlaceholder="Search movies and shows" />
           </div>

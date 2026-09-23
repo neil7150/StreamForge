@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { fetchJSONWithFailover } from '../src/main/search/provider-endpoints.ts'
+import { fetchJSONWithFailover, fetchTextWithFailover } from '../src/main/search/provider-endpoints.ts'
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -29,4 +29,13 @@ test('rejects provider HTTP errors and reports total failure', async () => {
     fetchJSONWithFailover(['https://primary.test', 'https://mirror.test'], '/api', async () => response({}, 503)),
     /primary\.test returned HTTP 503/
   )
+})
+
+test('fails over text feeds used by RSS providers', async () => {
+  const result = await fetchTextWithFailover(['https://primary.test', 'https://mirror.test'], '/rss', async (input) => {
+    if (String(input).startsWith('https://primary.test')) return new Response('', { status: 503 })
+    return new Response('<rss></rss>', { status: 200 })
+  })
+  assert.equal(result.endpoint, 'https://mirror.test')
+  assert.equal(result.text, '<rss></rss>')
 })

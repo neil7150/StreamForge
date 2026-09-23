@@ -3,6 +3,11 @@ import { create } from 'zustand'
 export type PreferredQuality = 'auto' | '2160p' | '1080p' | '720p'
 export type SubtitleMode = 'auto' | 'always' | 'off'
 
+export interface TorznabEndpointSetting {
+  url: string
+  apiKey: string
+}
+
 export interface PlaybackSettings {
   preferredQuality: PreferredQuality
   preferDirectPlay: boolean
@@ -18,8 +23,9 @@ export interface PlaybackSettings {
   skipChapterMarkers: boolean
   openSubtitlesApiKey: string
   torznabEnabled: boolean
-  torznabUrl: string
-  torznabApiKey: string
+  torznabEndpoints: TorznabEndpointSetting[]
+  stremioAddonEnabled: boolean
+  stremioAddonUrls: string[]
 }
 
 interface PlaybackSettingsState extends PlaybackSettings {
@@ -44,14 +50,27 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   skipChapterMarkers: true,
   openSubtitlesApiKey: '',
   torznabEnabled: false,
-  torznabUrl: '',
-  torznabApiKey: ''
+  torznabEndpoints: [],
+  stremioAddonEnabled: false,
+  stremioAddonUrls: []
 }
 
 function loadSettings(): PlaybackSettings {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') as Partial<PlaybackSettings>
-    return { ...DEFAULT_PLAYBACK_SETTINGS, ...saved }
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') as Partial<PlaybackSettings> & {
+      torznabUrl?: string
+      torznabApiKey?: string
+    }
+    const savedEndpoints = Array.isArray(saved.torznabEndpoints)
+      ? saved.torznabEndpoints.filter((endpoint) => endpoint && typeof endpoint.url === 'string').slice(0, 8).map((endpoint) => ({
+        url: endpoint.url,
+        apiKey: typeof endpoint.apiKey === 'string' ? endpoint.apiKey : ''
+      }))
+      : []
+    const torznabEndpoints = savedEndpoints.length > 0
+      ? savedEndpoints
+      : (saved.torznabUrl ? [{ url: saved.torznabUrl, apiKey: saved.torznabApiKey || '' }] : [])
+    return { ...DEFAULT_PLAYBACK_SETTINGS, ...saved, torznabEndpoints }
   } catch {
     return DEFAULT_PLAYBACK_SETTINGS
   }
@@ -90,8 +109,9 @@ export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set) => (
       skipChapterMarkers: partial.skipChapterMarkers ?? state.skipChapterMarkers,
       openSubtitlesApiKey: partial.openSubtitlesApiKey ?? state.openSubtitlesApiKey,
       torznabEnabled: partial.torznabEnabled ?? state.torznabEnabled,
-      torznabUrl: partial.torznabUrl ?? state.torznabUrl,
-      torznabApiKey: partial.torznabApiKey ?? state.torznabApiKey
+      torznabEndpoints: (partial.torznabEndpoints ?? state.torznabEndpoints).slice(0, 8),
+      stremioAddonEnabled: partial.stremioAddonEnabled ?? state.stremioAddonEnabled,
+      stremioAddonUrls: (partial.stremioAddonUrls ?? state.stremioAddonUrls).slice(0, 8)
     }
     persist(next)
     return next

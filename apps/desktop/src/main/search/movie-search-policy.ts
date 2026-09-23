@@ -6,6 +6,8 @@ export interface MovieTorrentSearchRequest {
   imdbId?: string
   torznabUrl?: string
   torznabApiKey?: string
+  torznabEndpoints?: Array<{ url: string; apiKey?: string }>
+  stremioAddonUrls?: string[]
 }
 
 function normalizeTitle(value: string): string {
@@ -38,7 +40,8 @@ export function matchesMovieRelease(
   if (/s\d{1,3}[\s._-]*e\d{1,3}|(?:^|[^a-z0-9])\d{1,3}x\d{1,3}(?:$|[^a-z0-9])/i.test(result.name)) {
     return false
   }
+  if (/\b(?:trailer|sample|featurette|clip)\b/i.test(result.name)) return false
   if (!request.year) return true
-  if (result.provider === 'YTS' && result.added === String(request.year)) return true
+  if ((result.provider === 'YTS' || result.provider === 'InternetArchive') && result.added === String(request.year)) return true
   return new RegExp(`(?:^|[^0-9])${request.year}(?:$|[^0-9])`).test(result.name)
 }

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { EpisodeSummary, SeasonSummary } from '../src/preload/index.d.ts'
 import {
+  absoluteEpisodeNumber,
   episodeCode,
   formatCatalogDate,
   isUpcomingEpisode,
   parseSeriesId,
-  seasonLabel
+  seasonLabel,
+  usesAbsoluteEpisodeNumbering
 } from '../src/renderer/src/lib/series-detail-policy.ts'
 
 function season(overrides: Partial<SeasonSummary> = {}): SeasonSummary {
@@ -75,4 +77,29 @@ test('formats ISO catalog dates without local timezone drift', () => {
   assert.equal(formatCatalogDate('2026-08-10'), 'Aug 10, 2026')
   assert.equal(formatCatalogDate(null), null)
   assert.equal(formatCatalogDate('unknown'), 'unknown')
+})
+
+test('calculates absolute anime episode numbers from preceding regular seasons', () => {
+  const seasons = [
+    season({ number: 0, episodeCount: 4 }),
+    season({ number: 1, episodeCount: 25 }),
+    season({ number: 2, episodeCount: 24 }),
+    season({ number: 3, episodeCount: 26 })
+  ]
+  assert.equal(absoluteEpisodeNumber(seasons, 1, 1), 1)
+  assert.equal(absoluteEpisodeNumber(seasons, 3, 2), 51)
+  assert.equal(absoluteEpisodeNumber(seasons, 0, 2), undefined)
+  assert.equal(absoluteEpisodeNumber([season({ number: 1, episodeCount: null }), season({ number: 2 })], 2, 1), undefined)
+})
+
+test('presents year-grouped long-running anime as absolute episode ranges', () => {
+  const seasons = [
+    season({ number: 1, episodeCount: 13, absoluteEpisodeStart: 1, absoluteEpisodeEnd: 13 }),
+    season({ number: 2, episodeCount: 49, absoluteEpisodeStart: 14, absoluteEpisodeEnd: 62 })
+  ]
+  assert.equal(usesAbsoluteEpisodeNumbering(seasons), true)
+  assert.equal(seasonLabel(seasons[1]), 'Episodes 14–62')
+  assert.equal(absoluteEpisodeNumber(seasons, 2, 1), 14)
+  assert.equal(episodeCode(episode({ seasonNumber: 2, episodeNumber: 1 }), 14), 'EP 014')
+  assert.equal(seasonLabel(season({ absoluteEpisodeStart: 1156, absoluteEpisodeEnd: undefined })), 'Episodes 1156+')
 })

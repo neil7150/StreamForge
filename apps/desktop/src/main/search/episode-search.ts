@@ -1,7 +1,9 @@
-import type { TorrentSearchResponse, TorrentSearchResult } from './provider-policy'
+import { deduplicateResults, type TorrentProviderStatus, type TorrentSearchResponse, type TorrentSearchResult } from './provider-policy'
 import { searchTorrentProviders } from './provider-search'
 import {
   buildEpisodeSearchQuery,
+  buildAnimeAbsoluteSearchQueries,
+  buildAnimeBatchSearchQueries,
   matchesEpisodeRelease,
   type EpisodeTorrentSearchRequest
 } from './episode-search-policy'
@@ -17,19 +19,50 @@ function isVideoResult(result: TorrentSearchResult): boolean {
 export async function searchEpisodeTorrentProviders(
   request: EpisodeTorrentSearchRequest
 ): Promise<TorrentSearchResponse> {
-  const response = await searchTorrentProviders(
+  const torznabEnabled = Boolean(request.torznabEndpoints?.length || request.torznabUrl)
+  const optionalTorznab = torznabEnabled ? ['Torznab' as const] : []
+  const optionalStremioAddon = request.imdbId && request.stremioAddonUrls?.length
+    ? ['StremioAddon' as const]
+    : []
+  const standardPromise = request.absoluteEpisodeOnly ? Promise.resolve(null) : searchTorrentProviders(
     buildEpisodeSearchQuery(request),
-    ['APIBay', 'Nyaa', 'EZTV', ...(request.torznabUrl ? ['Torznab' as const] : [])],
+    ['Knaben', '1337x', 'APIBay', 'Nyaa', 'EZTV', ...optionalTorznab, ...optionalStremioAddon],
     request
   )
-  const results = response.results.filter((result) => (
-    isVideoResult(result) && matchesEpisodeRelease(result.name, request)
-  ))
+  const animeQueries = buildAnimeAbsoluteSearchQueries(request)
+  const animePromise = Promise.all(animeQueries.map((query) => searchTorrentProviders(
+    query,
+    ['SubsPlease', 'AnimeTosho', '1337x', 'AniDex', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', ...optionalTorznab],
+    request
+  )))
+  const batchPromise = Promise.all(
+    buildAnimeBatchSearchQueries(request).map((query) => searchTorrentProviders(
+      query,
+      ['SubsPlease', 'AnimeTosho', '1337x', 'AniDex', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', ...optionalTorznab],
+      request
+    ))
+  )
+  const [standardResponse, animeResponses, batchResponses] = await Promise.all([
+    standardPromise,
+    animePromise,
+    batchPromise
+  ])
+  const responses = [...(standardResponse ? [standardResponse] : []), ...animeResponses, ...batchResponses]
+  const combinedStatuses = new Map<TorrentProviderStatus['name'], TorrentProviderStatus>()
+  for (const response of responses) {
+    for (const status of response.providers) {
+      const current = combinedStatuses.get(status.name)
+      if (!current || (current.status !== 'ok' && status.status === 'ok')) combinedStatuses.set(status.name, status)
+    }
+  }
+  const results = deduplicateResults(responses.flatMap((response) => response.results).filter((result) => (
+    isVideoResult(result) && (result.provider === 'StremioAddon' || matchesEpisodeRelease(result.name, request))
+  )))
 
   return {
-    ...response,
+    cache: responses.some((response) => response.cache === 'stale') ? 'stale' : 'miss',
     results,
-    providers: response.providers.map((provider) => ({
+    providers: [...combinedStatuses.values()].map((provider) => ({
       ...provider,
       count: results.filter((result) => result.provider === provider.name).length
     }))

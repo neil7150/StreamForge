@@ -22,8 +22,8 @@ export class ProviderHealthTracker {
   private readonly now: () => number
 
   constructor(
-    failureThreshold = 3,
-    cooldownMs = 60_000,
+    failureThreshold = 5,
+    cooldownMs = 45_000,
     now: () => number = Date.now
   ) {
     this.failureThreshold = failureThreshold

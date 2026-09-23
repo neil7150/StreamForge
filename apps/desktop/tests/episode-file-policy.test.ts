@@ -38,3 +38,77 @@ test('requires a manual choice when multiple video files match', () => {
   ], preferred)
   assert.deepEqual(result, { status: 'ambiguous', fileIndex: null, candidateIndexes: [0, 1] })
 })
+
+test('selects an absolute-numbered anime episode file using a verified alias', () => {
+  const result = findPreferredEpisodeFile([
+    { name: '[Group] Naruto Shippuuden - 219.mkv' },
+    { name: '[Group] Naruto Shippuuden - 220v2.mkv' },
+    { name: '[Group] Naruto Shippuuden - 221.mkv' }
+  ], {
+    seasonNumber: 10,
+    episodeNumber: 24,
+    absoluteEpisodeNumber: 220,
+    seriesTitles: ['Naruto: Shippuden', 'Naruto Shippuuden']
+  })
+  assert.deepEqual(result, { status: 'matched', fileIndex: 1, candidateIndexes: [1] })
+})
+
+test('absolute-only anime selection ignores fake seasonal files', () => {
+  const result = findPreferredEpisodeFile([
+    { name: 'Bleach S02E01.mkv' },
+    { name: '[Group] Bleach - 014.mkv' }
+  ], {
+    seasonNumber: 2,
+    episodeNumber: 1,
+    absoluteEpisodeNumber: 14,
+    absoluteEpisodeOnly: true,
+    seriesTitles: ['Bleach']
+  })
+  assert.deepEqual(result, { status: 'matched', fileIndex: 1, candidateIndexes: [1] })
+})
+
+test('extracts a bare absolute-numbered file from a full-series anime torrent', () => {
+  const result = findPreferredEpisodeFile([
+    { name: '[Group] 013 - The Blade.mkv', path: 'Bleach Complete/[Group] 013 - The Blade.mkv' },
+    { name: '[Group] 014 - Back to Back.mkv', path: 'Bleach Complete/[Group] 014 - Back to Back.mkv' },
+    { name: '[Group] 015 - Kon\'s Great Plan.mkv', path: 'Bleach Complete/[Group] 015 - Kon\'s Great Plan.mkv' }
+  ], {
+    seasonNumber: 2,
+    episodeNumber: 1,
+    absoluteEpisodeNumber: 14,
+    absoluteEpisodeOnly: true,
+    seriesTitles: ['Bleach']
+  })
+  assert.deepEqual(result, { status: 'matched', fileIndex: 1, candidateIndexes: [1] })
+})
+
+test('does not mistake one combined multi-episode video for an extracted episode', () => {
+  const result = findPreferredEpisodeFile([
+    { name: 'Bleach - 014-015.mkv' }
+  ], {
+    seasonNumber: 2,
+    episodeNumber: 1,
+    absoluteEpisodeNumber: 14,
+    absoluteEpisodeOnly: true,
+    seriesTitles: ['Bleach']
+  })
+  assert.deepEqual(result, { status: 'not-found', fileIndex: null, candidateIndexes: [] })
+})
+
+test('uses a provider-supplied exact file index for a series pack', () => {
+  const files = [
+    { name: 'Series Pack.txt' },
+    { name: 'opaque-release-name-a.mkv' },
+    { name: 'opaque-release-name-b.mkv' }
+  ]
+  assert.deepEqual(findPreferredEpisodeFile(files, {
+    seasonNumber: 1,
+    episodeNumber: 2,
+    fileIndex: 2
+  }), { status: 'matched', fileIndex: 2, candidateIndexes: [2] })
+  assert.equal(findPreferredEpisodeFile(files, {
+    seasonNumber: 1,
+    episodeNumber: 2,
+    fileIndex: 0
+  }).status, 'not-found')
+})

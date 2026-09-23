@@ -14,6 +14,7 @@ const (
 	refreshTokenPrefix = "auth:refresh:"
 	userTokensPrefix   = "auth:user_tokens:"
 	blacklistPrefix    = "auth:blacklist:"
+	emailVerifyPrefix  = "auth:email_verify:"
 )
 
 // TokenRepository handles token persistence in Redis.
@@ -126,4 +127,35 @@ func (r *TokenRepository) IsBlacklisted(ctx context.Context, jwtID string) (bool
 		return false, fmt.Errorf("check blacklist: %w", err)
 	}
 	return exists > 0, nil
+}
+
+// StoreVerificationToken stores an email verification token in Redis mapped to a user ID.
+func (r *TokenRepository) StoreVerificationToken(ctx context.Context, token string, userID uuid.UUID, ttl time.Duration) error {
+	err := r.client.Set(ctx, emailVerifyPrefix+token, userID.String(), ttl).Err()
+	if err != nil {
+		return fmt.Errorf("store verification token: %w", err)
+	}
+	return nil
+}
+
+// GetVerificationUserID retrieves the user ID associated with an email verification token.
+func (r *TokenRepository) GetVerificationUserID(ctx context.Context, token string) (uuid.UUID, error) {
+	val, err := r.client.Get(ctx, emailVerifyPrefix+token).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return uuid.Nil, fmt.Errorf("verification token not found or expired")
+		}
+		return uuid.Nil, fmt.Errorf("get verification token: %w", err)
+	}
+
+	userID, err := uuid.Parse(val)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parse user ID from token: %w", err)
+	}
+	return userID, nil
+}
+
+// DeleteVerificationToken removes a used email verification token.
+func (r *TokenRepository) DeleteVerificationToken(ctx context.Context, token string) error {
+	return r.client.Del(ctx, emailVerifyPrefix+token).Err()
 }

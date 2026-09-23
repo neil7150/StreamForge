@@ -3,6 +3,11 @@ export interface EndpointJSONResult {
   endpoint: string
 }
 
+export interface EndpointTextResult {
+  text: string
+  endpoint: string
+}
+
 export async function fetchJSONWithFailover(
   endpoints: string[],
   path: string,
@@ -30,4 +35,24 @@ export async function fetchJSONWithFailover(
       throw primaryError
     }
   }
+}
+
+export async function fetchTextWithFailover(
+  endpoints: string[],
+  path: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 8_000
+): Promise<EndpointTextResult> {
+  if (endpoints.length === 0) throw new Error('No provider endpoints are configured')
+
+  const request = async (endpoint: string): Promise<EndpointTextResult> => {
+    const response = await fetchImpl(`${endpoint}${path}`, {
+      headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    if (!response.ok) throw new Error(`${endpoint} returned HTTP ${response.status}`)
+    return { text: await response.text(), endpoint }
+  }
+
+  return Promise.any(endpoints.map(request))
 }

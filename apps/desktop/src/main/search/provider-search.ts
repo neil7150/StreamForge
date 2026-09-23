@@ -1,8 +1,9 @@
-import { net } from 'electron'
+import { net, session } from 'electron'
 import {
   buildMagnetURI,
   decodeXmlText,
   deduplicateResults,
+  extractInfoHashFromMagnet,
   formatFileSize,
   normalizeInfoHash,
   parseFileSize,
@@ -13,7 +14,19 @@ import {
   type TorrentSearchResult
 } from './provider-policy'
 import { ProviderHealthTracker, SearchResponseCache } from './provider-resilience'
-import { fetchJSONWithFailover } from './provider-endpoints'
+import { fetchJSONWithFailover, fetchTextWithFailover } from './provider-endpoints'
+import {
+  escapeInternetArchiveQuery,
+  parse1337xDetailMagnet,
+  parse1337xSearchList,
+  parseAniDexFeed,
+  parseAnimeToshoPayload,
+  parseInternetArchivePayload,
+  parseKnabenPayload,
+  parseStremioStreamPayload,
+  parseSubsPleasePayload,
+  parseTokyoToshoFeed
+} from './provider-parsers'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -26,8 +39,14 @@ const PROVIDER_TIMEOUT_MS = 8_000
 const providerHealth = new ProviderHealthTracker()
 const searchCache = new SearchResponseCache()
 const inFlightSearches = new Map<string, Promise<TorrentSearchResponse>>()
-const YTS_BASE_URLS = ['https://yts.bz', 'https://yts.gg', 'https://yts.lt', 'https://yts.am', 'https://yts.ag']
+const YTS_BASE_URLS = ['https://yts.mx', 'https://yts.bz', 'https://yts.lt', 'https://yts.am', 'https://yts.rs']
 let preferredYTSBaseURL = YTS_BASE_URLS[0]
+const TOKYO_TOSHO_BASE_URLS = ['https://tokyotosho.info', 'https://www.tokyotosho.info']
+let preferredTokyoToshoBaseURL = TOKYO_TOSHO_BASE_URLS[0]
+const X1337_BASE_URLS = ['https://1337x.to', 'https://1337x.st', 'https://x1337x.ws', 'https://x1337x.eu', 'https://x1337x.cc']
+let preferred1337xBaseURL = X1337_BASE_URLS[0]
+const ANIDEX_BASE_URLS = ['https://anidex.info']
+let preferredAniDexBaseURL = ANIDEX_BASE_URLS[0]
 
 const CATEGORY_MAP: Record<string, string> = {
   '100': 'Audio',
@@ -138,6 +157,8 @@ async function runProvider(
   }
 }
 
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
 async function fetchJSON(url: string): Promise<unknown> {
   const response = await providerFetch(url, {
     headers: { Accept: 'application/json' },
@@ -147,11 +168,39 @@ async function fetchJSON(url: string): Promise<unknown> {
   return response.json()
 }
 
+/**
+ * Dedicated Electron session for provider scraping with disk cache DISABLED.
+ * This prevents Chromium from writing scraped torrent-site HTML/JS to
+ * AppData\Roaming\streamforge-desktop\Cache\Cache_Data\, which would
+ * trigger Windows Defender false positives on embedded ad scripts.
+ *
+ * Lazy-initialized because session.fromPartition() requires app.isReady().
+ * Provider searches only happen after UI interaction, so this is always safe.
+ */
+let _scraperSession: Electron.Session | null = null
+function getScraperSession(): Electron.Session {
+  if (!_scraperSession) {
+    _scraperSession = session.fromPartition('scraper', { cache: false })
+  }
+  return _scraperSession
+}
+
 function providerFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-  // Chromium's network service handles a few provider TLS/CDN paths that
-  // Node's undici client resets. Unit-test and non-Electron callers retain fetch.
-  if (process.versions.electron) return net.fetch(input instanceof URL ? input.toString() : input, init)
-  return fetch(input, init)
+  const headers = new Headers(init?.headers)
+  if (!headers.has('User-Agent')) {
+    headers.set('User-Agent', BROWSER_USER_AGENT)
+  }
+  // Use Chromium's net.fetch with a dedicated no-cache session so that:
+  // 1. Requests carry an authentic Chrome TLS fingerprint (bypasses Cloudflare)
+  // 2. Scraped torrent-site HTML is NEVER written to disk (prevents Defender alerts)
+  if (process.versions.electron) {
+    const opts = { ...init, headers, session: getScraperSession() } as Record<string, unknown>
+    return net.fetch(
+      input instanceof URL ? input.toString() : input as string,
+      opts as Parameters<typeof net.fetch>[1]
+    )
+  }
+  return fetch(input, { ...init, headers })
 }
 
 async function searchAPIBay(query: string): Promise<TorrentSearchResult[]> {
@@ -195,49 +244,128 @@ function readXmlTag(itemXml: string, tag: string): string {
 }
 
 async function searchNyaa(query: string): Promise<TorrentSearchResult[]> {
-  const response = await providerFetch(`https://nyaa.si/?page=rss&q=${encodeURIComponent(query)}`, {
-    headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+  const fetchFromNyaa = async (baseUrl: string): Promise<TorrentSearchResult[]> => {
+    const response = await providerFetch(`${baseUrl}/?page=rss&q=${encodeURIComponent(query)}`, {
+      headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    const xml = await response.text()
+    if (!/<rss[\s>]/i.test(xml)) throw new Error('Invalid RSS response')
+
+    const results: TorrentSearchResult[] = []
+    const itemRegex = /<item>([\s\S]*?)<\/item>/gi
+    let itemMatch: RegExpExecArray | null
+
+    while ((itemMatch = itemRegex.exec(xml)) !== null) {
+      const itemXml = itemMatch[1]
+      const hash = normalizeInfoHash(readXmlTag(itemXml, 'nyaa:infoHash'))
+      const name = readXmlTag(itemXml, 'title')
+      if (!hash || !name) continue
+
+      const magnetURI = buildMagnetURI(hash, name)
+      if (!magnetURI) continue
+
+      const size = readXmlTag(itemXml, 'nyaa:size') || '0 B'
+      const published = readXmlTag(itemXml, 'pubDate')
+      const publishedDate = published ? new Date(published) : null
+
+      results.push({
+        id: `nyaa-${hash}`,
+        name,
+        magnetURI,
+        seeders: Math.round(asNumber(readXmlTag(itemXml, 'nyaa:seeders'))),
+        leechers: Math.round(asNumber(readXmlTag(itemXml, 'nyaa:leechers'))),
+        size,
+        sizeBytes: parseFileSize(size),
+        category: readXmlTag(itemXml, 'nyaa:category') || 'Anime',
+        added: publishedDate && Number.isFinite(publishedDate.getTime())
+          ? publishedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+          : '',
+        provider: 'Nyaa'
+      })
+    }
+    return results
+  }
+
+  try {
+    return await fetchFromNyaa('https://nyaa.si')
+  } catch {
+    // If nyaa.si is blocked or times out, failover seamlessly to AnimeTosho (which mirrors all Nyaa content)
+    try {
+      const fallback = await searchAnimeTosho(query)
+      return fallback.map((item) => ({ ...item, provider: 'Nyaa' as const }))
+    } catch {
+      // Both Nyaa and its fallback failed — throw so the circuit breaker records this as a real failure
+      throw new Error('Nyaa and AnimeTosho fallback both failed')
+    }
+  }
+}
+
+async function searchAnimeTosho(query: string): Promise<TorrentSearchResult[]> {
+  const payload = await fetchJSON(`https://feed.animetosho.org/json?q=${encodeURIComponent(query)}&only_tor=1`)
+  return parseAnimeToshoPayload(payload)
+}
+
+async function searchKnaben(query: string): Promise<TorrentSearchResult[]> {
+  const response = await providerFetch('https://api.knaben.org/v1', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      search_type: '100%',
+      search_field: 'title',
+      query,
+      order_by: 'seeders',
+      order_direction: 'desc',
+      from: 0,
+      size: 100,
+      hide_unsafe: true,
+      hide_xxx: true
+    }),
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  return parseKnabenPayload(await response.json())
+}
 
-  const xml = await response.text()
-  if (!/<rss[\s>]/i.test(xml)) throw new Error('Invalid RSS response')
+function stremioStreamURL(manifestURL: string, videoId: string): string {
+  const url = new URL(manifestURL)
+  url.pathname = url.pathname.replace(/\/?manifest\.json\/?$/i, '').replace(/\/$/, '')
+    + `/stream/series/${videoId}.json`
+  return url.toString()
+}
 
-  const results: TorrentSearchResult[] = []
-  const itemRegex = /<item>([\s\S]*?)<\/item>/gi
-  let itemMatch: RegExpExecArray | null
-
-  while ((itemMatch = itemRegex.exec(xml)) !== null) {
-    const itemXml = itemMatch[1]
-    const hash = normalizeInfoHash(readXmlTag(itemXml, 'nyaa:infoHash'))
-    const name = readXmlTag(itemXml, 'title')
-    if (!hash || !name) continue
-
-    const magnetURI = buildMagnetURI(hash, name)
-    if (!magnetURI) continue
-
-    const size = readXmlTag(itemXml, 'nyaa:size') || '0 B'
-    const published = readXmlTag(itemXml, 'pubDate')
-    const publishedDate = published ? new Date(published) : null
-
-    results.push({
-      id: `nyaa-${hash}`,
-      name,
-      magnetURI,
-      seeders: Math.round(asNumber(readXmlTag(itemXml, 'nyaa:seeders'))),
-      leechers: Math.round(asNumber(readXmlTag(itemXml, 'nyaa:leechers'))),
-      size,
-      sizeBytes: parseFileSize(size),
-      category: readXmlTag(itemXml, 'nyaa:category') || 'Anime',
-      added: publishedDate && Number.isFinite(publishedDate.getTime())
-        ? publishedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-        : '',
-      provider: 'Nyaa'
-    })
+async function searchStremioAddons(_query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
+  if (!config.imdbId || config.seasonNumber === undefined || config.episodeNumber === undefined) return []
+  const endpoints = config.stremioAddonUrls ?? []
+  if (endpoints.length === 0) return []
+  const videoId = `${config.imdbId}:${config.seasonNumber}:${config.episodeNumber}`
+  const searches = await Promise.allSettled(endpoints.map(async (endpoint, index) => (
+    parseStremioStreamPayload(await fetchJSON(stremioStreamURL(endpoint, videoId)), index)
+  )))
+  const results = searches
+    .filter((result): result is PromiseFulfilledResult<TorrentSearchResult[]> => result.status === 'fulfilled')
+    .flatMap((result) => result.value)
+  if (searches.length > 0 && searches.every((result) => result.status === 'rejected')) {
+    const failure = searches[0] as PromiseRejectedResult
+    throw failure.reason instanceof Error ? failure.reason : new Error('All Stremio addon endpoints failed')
   }
+  return deduplicateResults(results)
+}
 
-  return results
+async function searchTokyoTosho(query: string): Promise<TorrentSearchResult[]> {
+  const endpoints = [
+    preferredTokyoToshoBaseURL,
+    ...TOKYO_TOSHO_BASE_URLS.filter((url) => url !== preferredTokyoToshoBaseURL)
+  ]
+  const { text, endpoint } = await fetchTextWithFailover(
+    endpoints,
+    `/rss.php?filter=1&terms=${encodeURIComponent(query)}`,
+    providerFetch
+  )
+  preferredTokyoToshoBaseURL = endpoint
+  return parseTokyoToshoFeed(text)
 }
 
 async function searchYTS(query: string): Promise<TorrentSearchResult[]> {
@@ -290,11 +418,33 @@ async function searchYTS(query: string): Promise<TorrentSearchResult[]> {
   return results
 }
 
+const EZTV_BASE_URLS = ['https://eztvx.to', 'https://eztv.wf', 'https://eztv.re', 'https://eztv.tf']
+let preferredEZTVBaseURL = EZTV_BASE_URLS[0]
+
 async function searchEZTV(_query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
   const imdbNumber = config.imdbId?.replace(/^tt/i, '')
   if (!imdbNumber) return []
-  const payload = asRecord(await fetchJSON(`https://eztvx.to/api/get-torrents?limit=100&imdb_id=${encodeURIComponent(imdbNumber)}`))
-  if (!payload || !Array.isArray(payload.torrents)) throw new Error('Invalid response')
+  const endpoints = [preferredEZTVBaseURL, ...EZTV_BASE_URLS.filter((url) => url !== preferredEZTVBaseURL)]
+  let rawPayload: unknown
+  try {
+    const { payload, endpoint } = await fetchJSONWithFailover(
+      endpoints,
+      `/api/get-torrents?limit=100&imdb_id=${encodeURIComponent(imdbNumber)}`,
+      providerFetch
+    )
+    preferredEZTVBaseURL = endpoint
+    rawPayload = payload
+  } catch (error) {
+    // Re-throw so the circuit breaker records this as a real failure
+    // (previously returned [] which masked outages and showed 0 results instead of 'error')
+    throw error
+  }
+
+  const payload = asRecord(rawPayload)
+  if (!payload || !Array.isArray(payload.torrents)) {
+    // A valid JSON response with no torrents is a legitimate empty result, not an error
+    return []
+  }
 
   const results: TorrentSearchResult[] = []
   for (const value of payload.torrents) {
@@ -339,57 +489,161 @@ function torznabCategoryLabel(value: string): string {
 }
 
 async function searchTorznab(query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
-  if (!config.torznabUrl) return []
-  const url = new URL(config.torznabUrl)
-  url.searchParams.set('t', 'search')
-  url.searchParams.set('q', query)
-  url.searchParams.set('attrs', 'infohash,magneturl,seeders,peers,size,category')
-  if (config.torznabApiKey) url.searchParams.set('apikey', config.torznabApiKey)
-  const response = await providerFetch(url, {
-    headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
-    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
-  })
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const xml = await response.text()
-  if (!/<(?:rss|channel)[\s>]/i.test(xml)) throw new Error('Invalid Torznab response')
+  const endpoints = config.torznabEndpoints?.length
+    ? config.torznabEndpoints
+    : (config.torznabUrl ? [{ url: config.torznabUrl, apiKey: config.torznabApiKey }] : [])
+  if (endpoints.length === 0) return []
+  const searches = await Promise.allSettled(endpoints.map(async (endpoint) => {
+    const url = new URL(endpoint.url)
+    url.searchParams.set('t', 'search')
+    url.searchParams.set('q', query)
+    url.searchParams.set('attrs', 'infohash,magneturl,seeders,peers,size,category')
+    if (endpoint.apiKey) url.searchParams.set('apikey', endpoint.apiKey)
+    const response = await providerFetch(url, {
+      headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+    })
+    if (!response.ok) throw new Error(`${url.host} returned HTTP ${response.status}`)
+    return response.text()
+  }))
+  const feeds = searches
+    .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
+    .map((result) => result.value)
+    .filter((xml) => /<(?:rss|channel)[\s>]/i.test(xml))
+  if (feeds.length === 0) {
+    const firstFailure = searches.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    throw firstFailure?.reason instanceof Error ? firstFailure.reason : new Error('All Torznab endpoints failed')
+  }
 
   const results: TorrentSearchResult[] = []
-  const itemRegex = /<item>([\s\S]*?)<\/item>/gi
-  let itemMatch: RegExpExecArray | null
-  while ((itemMatch = itemRegex.exec(xml)) !== null) {
-    const itemXml = itemMatch[1]
-    const name = readXmlTag(itemXml, 'title')
-    const hash = normalizeInfoHash(readTorznabAttribute(itemXml, 'infohash'))
-    const magnetValue = readTorznabAttribute(itemXml, 'magneturl') || readXmlTag(itemXml, 'link')
-    const magnetURI = magnetValue.startsWith('magnet:') ? magnetValue : (hash ? buildMagnetURI(hash, name) : null)
-    if (!name || !magnetURI) continue
-    const sizeBytes = Math.round(asNumber(readTorznabAttribute(itemXml, 'size') || readXmlTag(itemXml, 'size')))
-    const published = readXmlTag(itemXml, 'pubDate')
-    const publishedDate = published ? new Date(published) : null
-    results.push({
-      id: `torznab-${hash || results.length}`,
-      name,
-      magnetURI,
-      seeders: Math.round(asNumber(readTorznabAttribute(itemXml, 'seeders'))),
-      leechers: Math.round(asNumber(readTorznabAttribute(itemXml, 'peers') || readTorznabAttribute(itemXml, 'leechers'))),
-      size: formatFileSize(sizeBytes),
-      sizeBytes,
-      category: torznabCategoryLabel(readTorznabAttribute(itemXml, 'category')),
-      added: publishedDate && Number.isFinite(publishedDate.getTime())
-        ? publishedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-        : '',
-      provider: 'Torznab'
-    })
+  for (const xml of feeds) {
+    const itemRegex = /<item>([\s\S]*?)<\/item>/gi
+    let itemMatch: RegExpExecArray | null
+    while ((itemMatch = itemRegex.exec(xml)) !== null) {
+      const itemXml = itemMatch[1]
+      const name = readXmlTag(itemXml, 'title')
+      const hash = normalizeInfoHash(readTorznabAttribute(itemXml, 'infohash'))
+      const magnetValue = readTorznabAttribute(itemXml, 'magneturl') || readXmlTag(itemXml, 'link')
+      const magnetURI = magnetValue.startsWith('magnet:') ? magnetValue : (hash ? buildMagnetURI(hash, name) : null)
+      if (!name || !magnetURI) continue
+      const sizeBytes = Math.round(asNumber(readTorznabAttribute(itemXml, 'size') || readXmlTag(itemXml, 'size')))
+      const published = readXmlTag(itemXml, 'pubDate')
+      const publishedDate = published ? new Date(published) : null
+      results.push({
+        id: `torznab-${hash || results.length}`,
+        name,
+        magnetURI,
+        seeders: Math.round(asNumber(readTorznabAttribute(itemXml, 'seeders'))),
+        leechers: Math.round(asNumber(readTorznabAttribute(itemXml, 'peers') || readTorznabAttribute(itemXml, 'leechers'))),
+        size: formatFileSize(sizeBytes),
+        sizeBytes,
+        category: torznabCategoryLabel(readTorznabAttribute(itemXml, 'category')),
+        added: publishedDate && Number.isFinite(publishedDate.getTime())
+          ? publishedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+          : '',
+        provider: 'Torznab'
+      })
+    }
   }
-  return results
+  return deduplicateResults(results)
 }
 
+async function searchInternetArchive(query: string): Promise<TorrentSearchResult[]> {
+  const title = escapeInternetArchiveQuery(query.replace(/\s+(?:18|19|20|21)\d{2}\s*$/, '').trim())
+  const search = `title:(\"${title}\") AND mediatype:movies AND btih:*`
+  const params = new URLSearchParams({ q: search, rows: '50', page: '1', output: 'json' })
+  for (const field of ['identifier', 'title', 'downloads', 'item_size', 'date', 'btih']) {
+    params.append('fl[]', field)
+  }
+  const payload = await fetchJSON(`https://archive.org/advancedsearch.php?${params.toString()}`)
+  return parseInternetArchivePayload(payload)
+}
+
+async function search1337x(query: string): Promise<TorrentSearchResult[]> {
+  const endpoints = [
+    preferred1337xBaseURL,
+    ...X1337_BASE_URLS.filter((url) => url !== preferred1337xBaseURL)
+  ]
+  const { text, endpoint } = await fetchTextWithFailover(
+    endpoints,
+    `/search/${encodeURIComponent(query)}/1/`,
+    providerFetch
+  )
+  preferred1337xBaseURL = endpoint
+  const items = parse1337xSearchList(text)
+  if (items.length === 0) return []
+
+  const topItems = items.slice(0, 10)
+  const detailPromises = topItems.map(async (item): Promise<TorrentSearchResult | null> => {
+    try {
+      const detailUrl = `${endpoint}${item.detailPath.startsWith('/') ? '' : '/'}${item.detailPath}`
+      const response = await providerFetch(detailUrl, {
+        signal: AbortSignal.timeout(6_000)
+      })
+      if (!response.ok) return null
+      const detailHtml = await response.text()
+      const magnetURI = parse1337xDetailMagnet(detailHtml)
+      if (!magnetURI) return null
+      const hash = extractInfoHashFromMagnet(magnetURI) || item.detailPath
+      return {
+        id: `1337x-${hash}`,
+        name: item.title,
+        magnetURI,
+        seeders: item.seeders,
+        leechers: item.leechers,
+        size: item.size,
+        sizeBytes: item.sizeBytes,
+        category: item.category,
+        added: item.added,
+        provider: '1337x'
+      }
+    } catch {
+      return null
+    }
+  })
+
+  const resolved = await Promise.all(detailPromises)
+  return resolved.filter((res): res is TorrentSearchResult => res !== null)
+}
+
+async function searchSubsPlease(query: string): Promise<TorrentSearchResult[]> {
+  const url = `https://subsplease.org/api/?f=search&tz=UTC&s=${encodeURIComponent(query)}`
+  const payload = await fetchJSON(url)
+  return parseSubsPleasePayload(payload)
+}
+
+async function searchAniDex(query: string): Promise<TorrentSearchResult[]> {
+  const endpoints = [
+    preferredAniDexBaseURL,
+    ...ANIDEX_BASE_URLS.filter((url) => url !== preferredAniDexBaseURL)
+  ]
+  const { text, endpoint } = await fetchTextWithFailover(
+    endpoints,
+    `/rss/?q=${encodeURIComponent(query)}`,
+    providerFetch
+  )
+  preferredAniDexBaseURL = endpoint
+  return parseAniDexFeed(text)
+}
+
+/*
+ * Keep provider functions explicit: each has independent health and cooldown state,
+ * while Torznab aggregates the user's configured Prowlarr/Jackett endpoints.
+ */
 const PROVIDER_SEARCHES: Record<TorrentProviderName, (query: string, config: SourceProviderConfig) => Promise<TorrentSearchResult[]>> = {
   APIBay: searchAPIBay,
   Nyaa: searchNyaa,
+  AnimeTosho: searchAnimeTosho,
+  TokyoTosho: searchTokyoTosho,
+  SubsPlease: searchSubsPlease,
+  AniDex: searchAniDex,
   YTS: searchYTS,
   EZTV: searchEZTV,
-  Torznab: searchTorznab
+  Knaben: searchKnaben,
+  Torznab: searchTorznab,
+  StremioAddon: searchStremioAddons,
+  InternetArchive: searchInternetArchive,
+  '1337x': search1337x
 }
 
 async function executeProviderSearch(
@@ -427,7 +681,9 @@ export async function searchTorrentProviders(
   config: SourceProviderConfig = {}
 ): Promise<TorrentSearchResponse> {
   const uniqueProviders = [...new Set(providers)]
-  const cacheKey = `${uniqueProviders.join(',')}:${config.imdbId || ''}:${config.torznabUrl || ''}:${query}`
+  const torznabUrls = config.torznabEndpoints?.map((endpoint) => endpoint.url).join('|') || config.torznabUrl || ''
+  const addonUrls = config.stremioAddonUrls?.join('|') || ''
+  const cacheKey = `${uniqueProviders.join(',')}:${config.imdbId || ''}:${torznabUrls}:${addonUrls}:${config.seasonNumber ?? ''}:${config.episodeNumber ?? ''}:${query}`
   const fresh = searchCache.getFresh(cacheKey)
   if (fresh) {
     return {

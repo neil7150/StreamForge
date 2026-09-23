@@ -67,6 +67,18 @@ export function isValidMagnet(uri: string): boolean {
  * Magnet URIs have the form: magnet:?xt=urn:btih:<infoHash>&...
  */
 export function extractInfoHash(magnetURI: string): string | null {
+  try {
+    const magnet = new URL(magnetURI)
+    if (magnet.protocol === 'magnet:') {
+      const exactTopic = magnet.searchParams.getAll('xt')
+        .find((topic) => topic.toLowerCase().startsWith('urn:btih:'))
+      const parsedHash = exactTopic?.slice('urn:btih:'.length) ?? ''
+      if (/^[a-fA-F0-9]{40}$/.test(parsedHash)) return parsedHash.toLowerCase()
+      if (/^[a-zA-Z2-7]{32}$/.test(parsedHash)) return base32ToHex(parsedHash)
+    }
+  } catch {
+    // Fall through to the tolerant matcher for older saved magnet strings.
+  }
   const match = magnetURI.match(/btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i)
   if (!match) return null
 

@@ -1,11 +1,13 @@
 import { ipcMain } from 'electron'
 import { TVMazeClient } from '../metadata/tvmaze-client'
 import { MovieCatalogClient } from '../metadata/movie-catalog-client'
+import { AniListClient } from '../metadata/anilist-client'
 import { requireCatalogId, requireMovieCatalogId, requireSearchQuery } from './validation'
 
 export function registerCatalogHandlers(
   client = new TVMazeClient(),
-  movieClient = new MovieCatalogClient()
+  movieClient = new MovieCatalogClient(),
+  animeClient = new AniListClient()
 ): void {
   ipcMain.handle('catalog:search-series', async (_, query: string) => (
     client.searchSeries(requireSearchQuery(query))
@@ -23,6 +25,10 @@ export function registerCatalogHandlers(
 
   ipcMain.handle('catalog:get-season-episodes', async (_, seasonId: number) => (
     client.getSeasonEpisodes(requireCatalogId(seasonId, 'season ID'))
+  ))
+
+  ipcMain.handle('catalog:get-anime-search-metadata', async (_, title: string) => (
+    animeClient.getAnimeSearchMetadata(requireSearchQuery(title))
   ))
 
   ipcMain.handle('catalog:search-movies', async (_, query: string) => (

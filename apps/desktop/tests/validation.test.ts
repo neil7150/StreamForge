@@ -69,6 +69,23 @@ test('normalizes and bounds structured episode searches', () => {
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: -1, episodeNumber: 2 }))
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 0 }))
   assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: 'Naruto Shippuden', seasonNumber: 2, episodeNumber: 4,
+    seriesAliases: ['Naruto Shippuuden'], absoluteEpisodeNumber: 30
+  }), {
+    seriesTitle: 'Naruto Shippuden', seasonNumber: 2, episodeNumber: 4, episodeTitle: undefined,
+    seriesAliases: ['Naruto Shippuuden'], absoluteEpisodeNumber: 30
+  })
+  assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: 'Bleach', seasonNumber: 2, episodeNumber: 1,
+    absoluteEpisodeNumber: 14, absoluteEpisodeOnly: true
+  }), {
+    seriesTitle: 'Bleach', seasonNumber: 2, episodeNumber: 1, episodeTitle: undefined,
+    absoluteEpisodeNumber: 14, absoluteEpisodeOnly: true
+  })
+  assert.throws(() => requireEpisodeSearchRequest({
+    seriesTitle: 'Bleach', seasonNumber: 2, episodeNumber: 1, absoluteEpisodeOnly: true
+  }))
+  assert.deepEqual(requireEpisodeSearchRequest({
     seriesTitle: 'Example Show', seasonNumber: 1, episodeNumber: 2,
     imdbId: 'TT1234567', torznabUrl: 'http://localhost:9117/api', torznabApiKey: 'secret'
   }), {
@@ -76,6 +93,32 @@ test('normalizes and bounds structured episode searches', () => {
     imdbId: 'tt1234567', torznabUrl: 'http://localhost:9117/api', torznabApiKey: 'secret'
   })
   assert.throws(() => requireEpisodeSearchRequest({ seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2, torznabUrl: 'file:///tmp/feed' }))
+  assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: 'Example Show', seasonNumber: 1, episodeNumber: 2,
+    torznabEndpoints: [
+      { url: 'http://localhost:9696/1/api', apiKey: 'prowlarr' },
+      { url: 'http://localhost:9117/api/v2.0/indexers/all/results/torznab/api' }
+    ]
+  }).torznabEndpoints, [
+    { url: 'http://localhost:9696/1/api', apiKey: 'prowlarr' },
+    { url: 'http://localhost:9117/api/v2.0/indexers/all/results/torznab/api' }
+  ])
+  assert.throws(() => requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    torznabEndpoints: [{ url: 'file:///tmp/feed' }]
+  }))
+  assert.throws(() => requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    torznabEndpoints: Array.from({ length: 9 }, (_, index) => ({ url: `http://localhost:${9000 + index}/api` }))
+  }))
+  assert.deepEqual(requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    stremioAddonUrls: ['https://addon.example/config/manifest.json']
+  }).stremioAddonUrls, ['https://addon.example/config/manifest.json'])
+  assert.throws(() => requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    stremioAddonUrls: ['https://addon.example/config/not-a-manifest']
+  }))
 })
 
 test('validates preferred episode file selections', () => {
@@ -86,6 +129,9 @@ test('validates preferred episode file selections', () => {
   assert.throws(() => requirePreferredEpisodeFile(null))
   assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: -1, episodeNumber: 2 }))
   assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: 1, episodeNumber: 0 }))
+  assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: 2, episodeNumber: 1, absoluteEpisodeOnly: true }))
+  assert.equal(requirePreferredEpisodeFile({ seasonNumber: 1, episodeNumber: 2, fileIndex: 14 }).fileIndex, 14)
+  assert.throws(() => requirePreferredEpisodeFile({ seasonNumber: 1, episodeNumber: 2, fileIndex: -1 }))
 })
 
 test('normalizes and bounds structured movie searches', () => {

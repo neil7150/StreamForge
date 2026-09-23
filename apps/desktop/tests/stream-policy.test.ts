@@ -1,15 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  calculateAheadSeconds,
+  calculateFullFilePieceRange,
   calculateMetadataTailPieceRange,
   calculateStartupCriticalEndPiece,
   calculateStartupBufferBytes,
-  calculateStreamWindow,
-  FALLBACK_STARTUP_BUFFER_BYTES,
-  MAX_AHEAD_SECONDS,
-  MIN_AHEAD_SECONDS,
-  RETAINED_BEHIND_SECONDS
+  FALLBACK_STARTUP_BUFFER_BYTES
 } from '../src/main/torrent/stream-policy.ts'
 import {
   classifyTranscodeRequest,
@@ -38,28 +34,16 @@ import { createLatestTaskScheduler } from '../src/renderer/src/lib/latest-task-s
 
 const MIB = 1024 * 1024
 
-test('forward cache remains between 45 and 90 seconds', () => {
-  const bytesPerSecond = 2 * MIB
-  assert.equal(calculateAheadSeconds(6 * MIB, bytesPerSecond), MIN_AHEAD_SECONDS)
-  assert.equal(calculateAheadSeconds(3.2 * MIB, bytesPerSecond), 60)
-  assert.equal(calculateAheadSeconds(2 * MIB, bytesPerSecond), MAX_AHEAD_SECONDS)
-  assert.equal(calculateAheadSeconds(20 * MIB, bytesPerSecond, true), MAX_AHEAD_SECONDS)
-})
-
-test('window evicts watched data after the retention allowance', () => {
-  const policy = calculateStreamWindow({
-    fileLength: 9 * 1024 * MIB,
-    duration: 3434.7,
-    currentTime: 1800,
-    downloadSpeed: 5 * MIB
+test('the complete selected video remains selected for background download', () => {
+  assert.deepEqual(calculateFullFilePieceRange(0, 9 * 1024 * MIB, MIB), {
+    start: 0,
+    end: (9 * 1024) - 1
   })
-
-  const retainedSeconds = 1800 - policy.startByte / policy.bytesPerSecond
-  const aheadSeconds = policy.endByte / policy.bytesPerSecond - 1800
-  assert.ok(retainedSeconds <= RETAINED_BEHIND_SECONDS + 0.01)
-  assert.ok(aheadSeconds >= MIN_AHEAD_SECONDS)
-  assert.ok(aheadSeconds <= MAX_AHEAD_SECONDS + 0.01)
-  assert.ok(policy.endByte < 9 * 1024 * MIB)
+  assert.deepEqual(calculateFullFilePieceRange(3 * MIB, 10 * MIB, 2 * MIB), {
+    start: 1,
+    end: 6
+  })
+  assert.equal(calculateFullFilePieceRange(0, 0, MIB), null)
 })
 
 test('startup buffer scales with bitrate and stays bounded', () => {
