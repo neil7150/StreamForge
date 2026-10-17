@@ -380,3 +380,35 @@ export function parseAniDexFeed(xml: string): TorrentSearchResult[] {
   }
   return results
 }
+
+export function parseTorrentsCsvPayload(payload: unknown): TorrentSearchResult[] {
+  const root = asRecord(payload)
+  if (!Array.isArray(root?.torrents)) throw new Error('Invalid Torrents-CSV response')
+  const results: TorrentSearchResult[] = []
+  for (const value of root.torrents) {
+    const item = asRecord(value)
+    if (!item) continue
+    const name = asString(item.name).trim()
+    const hash = normalizeInfoHash(item.infohash ?? item.info_hash ?? item.hash)
+    if (!name || !hash) continue
+    const magnetURI = buildMagnetURI(hash, name)
+    if (!magnetURI) continue
+    const sizeBytes = Math.round(asNumber(item.size_bytes ?? item.size))
+    results.push({
+      id: `torrentscsv-${asString(item.id) || hash}`,
+      name,
+      magnetURI,
+      seeders: Math.round(asNumber(item.seeders)),
+      leechers: Math.round(asNumber(item.leechers)),
+      size: formatFileSize(sizeBytes),
+      sizeBytes,
+      category: asString(item.category) || 'Video',
+      added: unixDate(item.created_unix ?? item.created_at),
+      provider: 'TorrentsCSV'
+    })
+  }
+  return results
+}
+
+export const parseTorrentsCSVPayload = parseTorrentsCsvPayload
+

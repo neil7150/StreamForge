@@ -687,6 +687,37 @@ export default function VideoPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, sourceDuration, timelineOffset, restartOnSeek, onSeeking, onTimeUpdate, onEnded, onError, onPlaybackStateChange])
 
+  // Chromium silently plays video with no sound when it cannot decode the audio codec
+  // (e.g. AC3/DTS) - no error event fires. Detect it from the decoder byte counters so
+  // the user gets a visible warning instead of a silent failure.
+  const [silentAudioWarning, setSilentAudioWarning] = useState(false)
+  const audioTrackCount = audioTracks.length
+  useEffect(() => {
+    setSilentAudioWarning(false)
+    const video = videoRef.current as (HTMLVideoElement & {
+      webkitAudioDecodedByteCount?: number
+      webkitVideoDecodedByteCount?: number
+    }) | null
+    if (!video || audioTrackCount === 0) return
+
+    let playingSince: number | null = null
+    const timer = setInterval(() => {
+      const idle = video.paused || video.ended || video.seeking || video.readyState < 3
+      if (idle || video.muted || video.volume === 0) {
+        playingSince = null
+        return
+      }
+      if (playingSince === null) playingSince = Date.now()
+      if (Date.now() - playingSince < 5000) return
+
+      const audioBytes = video.webkitAudioDecodedByteCount
+      const videoBytes = video.webkitVideoDecodedByteCount
+      if (typeof audioBytes !== 'number' || typeof videoBytes !== 'number') return
+      setSilentAudioWarning(audioBytes === 0 && videoBytes > 0)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [src, audioTrackCount])
+
   // â”€â”€â”€ Fullscreen Change Listener â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   useEffect(() => {
@@ -1000,6 +1031,13 @@ export default function VideoPlayer({
         </div>
       )}
 
+      {silentAudioWarning && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-20 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/30 bg-black/80 px-4 py-2 text-[12px] font-medium text-amber-200 shadow-lg backdrop-blur-sm">
+          <VolumeX className="h-4 w-4 shrink-0" />
+          <span>No audio is being played. This source's audio format may be unsupported - try another audio track or source.</span>
+        </div>
+      )}
+
       {/* Large Center Play Button */}
       <div
         className={clsx(
@@ -1104,7 +1142,7 @@ export default function VideoPlayer({
         </div>
 
         {/* Control Bar */}
-        <div className="relative z-10 flex items-center gap-2 px-4 py-3">
+        <div className="player-controls relative z-10 flex items-center gap-2 px-4 py-3">
           {/* Skip backward */}
           <button
             onClick={() => skipBy(-10)}

@@ -53,7 +53,7 @@ export default function Home() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-[1280px] px-10 pb-14 pt-9">
         <header className="flex items-center justify-between">
           <h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Home</h1>
@@ -137,8 +137,8 @@ export default function Home() {
           </section>
         )}
 
-        <section className={clsx('mx-auto max-w-[760px] text-center', continueWatchingItem ? 'py-10' : 'py-16')}>
-          <h2 className="text-[36px] font-semibold tracking-[-0.045em] text-white">What do you want to watch?</h2>
+        <section className={clsx('home-hero mx-auto max-w-[760px] text-center', continueWatchingItem ? 'py-10' : 'py-16')}>
+          <h2 className="text-[clamp(26px,4vw,40px)] font-semibold tracking-[-0.045em] text-white">What do you want to watch?</h2>
           <p className="mt-3 max-w-xl text-[12px] leading-5 text-white/38 mx-auto">Search available video sources or paste a magnet link.</p>
           <div className="mt-7 text-left">
             <SmartSearchInput onMagnet={handleMagnet} onSearch={handleSearch} isLoading={isLoading} error={error} autoFocus searchPlaceholder="Search movies and shows" />

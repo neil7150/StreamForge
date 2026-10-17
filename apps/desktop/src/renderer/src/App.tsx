@@ -1,20 +1,20 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Routes, Route, useLocation } from 'react-router-dom'
 import TitleBar from './components/ui/TitleBar'
 import Sidebar from './components/ui/Sidebar'
 import CommandPalette from './components/ui/CommandPalette'
 import ShortcutsOverlay from './components/ui/ShortcutsOverlay'
 import Home from './pages/Home'
-import Browse from './pages/Browse'
-import MovieDetail from './pages/MovieDetail'
-import Search from './pages/Search'
-import SeriesDetail from './pages/SeriesDetail'
-import Watchlist from './pages/Watchlist'
-import History from './pages/History'
-import Downloads from './pages/Downloads'
-import Player from './pages/Player'
-import Settings from './pages/Settings'
-import Admin from './pages/Admin'
+const Browse = lazy(() => import('./pages/Browse'))
+const MovieDetail = lazy(() => import('./pages/MovieDetail'))
+const Search = lazy(() => import('./pages/Search'))
+const SeriesDetail = lazy(() => import('./pages/SeriesDetail'))
+const Watchlist = lazy(() => import('./pages/Watchlist'))
+const History = lazy(() => import('./pages/History'))
+const Downloads = lazy(() => import('./pages/Downloads'))
+const Player = lazy(() => import('./pages/Player'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Admin = lazy(() => import('./pages/Admin'))
 import { useTorrentEvents } from './hooks/useTorrent'
 import { useAppStore } from './stores/appStore'
 import { useAuthStore } from './stores/authStore'
@@ -53,10 +53,11 @@ export default function App() {
       <TitleBar />
       <CommandPalette />
       <ShortcutsOverlay />
-      <div className="flex min-h-0 flex-1">
+      <div className="app-shell flex min-h-0 flex-1">
         {!isPlayer && <Sidebar />}
-        <main className="min-w-0 flex-1 overflow-hidden">
-          <div key={location.pathname} className="h-full animate-[fade-in_0.16s_ease-out]">
+        <main className="app-content min-w-0 flex-1 overflow-hidden" aria-label="Page content">
+          <div className="h-full">
+            <Suspense fallback={<div className="route-loading" role="status">Opening page…</div>}>
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/browse" element={<Browse />} />
@@ -70,6 +71,7 @@ export default function App() {
               <Route path="/settings" element={<Settings />} />
               <Route path="/admin" element={<Admin />} />
             </Routes>
+            </Suspense>
           </div>
         </main>
       </div>

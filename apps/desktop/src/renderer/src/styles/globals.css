@@ -53,7 +53,20 @@
 @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
 @keyframes progress-bar { 0% { transform: translateX(-100%); } 50% { transform: translateX(0); } 100% { transform: translateX(100%); } }
 
-*, *::before, *::after { margin: 0; padding: 0; }
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  button, input, select, textarea { font: inherit; }
+  button:not(:disabled), select { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  button, a, input, select {
+    transition-property: color, background-color, border-color, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(.2,.8,.2,1);
+  }
+  button:not(:disabled):active { transform: translateY(1px); }
+  select, option { background-color: var(--color-bg-tertiary); color: var(--color-text-primary); }
+}
 html { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 body { background: var(--color-bg-primary); color: var(--color-text-primary); overflow: hidden; user-select: none; }
 button, a, input, select { -webkit-app-region: no-drag; }
@@ -78,7 +91,50 @@ button, a, input, select { -webkit-app-region: no-drag; }
 .media-card {
   background: var(--color-bg-card);
   border: 1px solid oklch(1 0 0 / 0.06);
+  transition: transform 180ms ease, border-color 180ms ease, background-color 180ms ease;
 }
+
+.app-content { container-type: inline-size; }
+.home-hero { position: relative; isolation: isolate; }
+.home-hero::before { content: ''; position: absolute; inset: 0 -8%; z-index: -1; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, rgb(94 234 212 / 0.045), transparent 68%); }
+.setting-row > input, .setting-row > select, .setting-row > div { max-width: 100%; }
+.app-content :is(h1,h2,h3) { text-wrap: balance; }
+.app-content :is(p,span)[class*="text-white/2"],
+.app-content :is(p,span)[class*="text-white/3"] { color: rgb(255 255 255 / 0.52); }
+.app-content :is(input,select):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.app-content [role="dialog"] { max-height: 85dvh; overflow-y: auto; animation: scale-in 180ms ease-out; }
+.page-enter { animation: slide-up 180ms cubic-bezier(.2,.8,.2,1); }
+.route-loading { display: grid; place-content: center; gap: 12px; height: 100%; text-align: center; color: var(--color-text-secondary); font-size: 13px; }
+.route-loading::before { content: ''; width: 28px; height: 28px; margin: auto; border: 2px solid var(--color-border); border-top-color: var(--color-accent); border-radius: 50%; animation: spin 800ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.app-content main { padding-inline: clamp(16px, 4cqi, 40px); }
+.app-content main > header { flex-wrap: wrap; gap: 16px; }
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(145px, 100%), 1fr)); gap: 20px; }
+.catalog-grid > * { content-visibility: auto; contain-intrinsic-size: auto 300px; }
+.player-controls { flex-wrap: wrap; row-gap: 8px; }
+.player-controls button { flex-shrink: 0; }
+.app-sidebar { width: 196px; }
+@media (max-width: 1100px) {
+  .app-sidebar { width: 68px; padding-inline: 8px; }
+  .app-sidebar .nav-label, .app-sidebar .nav-badge, .app-sidebar .nav-status-label { display: none; }
+  .app-sidebar nav a { justify-content: center; padding-inline: 0; }
+}
+@media (max-width: 600px) {
+  .app-shell { flex-direction: column-reverse; }
+  .app-sidebar { width: 100%; padding: 6px 8px; border-top: 1px solid var(--color-border); border-right: 0; }
+  .app-sidebar nav { display: flex; justify-content: space-around; gap: 4px; }
+  .app-sidebar nav a { flex: 1; margin: 0; }
+  .app-sidebar .nav-status { display: none; }
+  .app-content { min-height: 0; }
+  .player-controls { padding-inline: 8px; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@media (hover: none) {
+  .group button.opacity-0, .group div.opacity-0 { opacity: 1; }
+}
+.group:focus-within button.opacity-0, .group:focus-within div.opacity-0 { opacity: 1; }
 
 .media-card:hover {
   background: var(--color-bg-card-hover);

@@ -181,7 +181,7 @@ export default function MovieDetail() {
   if (pageError || !movie) return <div className="flex h-full flex-col items-center justify-center px-8 text-center" role="alert"><WifiOff className="h-7 w-7 text-white/16" /><p className="mt-4 text-[12px] text-white/55">{pageError || 'The movie could not be loaded.'}</p><div className="mt-5 flex gap-2"><button onClick={goBack} className="rounded-lg border border-white/[0.09] px-3 py-2 text-[10px] text-white/55">Back to search</button>{movieId !== null && <button onClick={() => void loadMovie()} className="rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-[#17191b]">Try again</button>}</div></div>
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <header className="relative overflow-hidden border-b border-white/[0.06]">
         {(movie.backdropUrl || movie.posterUrl) && (
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -196,9 +196,9 @@ export default function MovieDetail() {
             <div className="absolute inset-0 bg-gradient-to-r from-[#101214] via-[#101214]/85 to-[#101214]/60" />
           </div>
         )}
-        <div className="relative mx-auto max-w-[1160px] px-10 pb-9 pt-7">
+        <div className="relative mx-auto max-w-[1160px] px-4 pb-9 pt-7 sm:px-7 lg:px-10">
           <button onClick={goBack} className="mb-7 flex items-center gap-2 text-[10px] text-white/38 hover:text-white/75"><ArrowLeft className="h-3.5 w-3.5" /> Back to search</button>
-          <div className="flex items-end gap-7">
+          <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-end sm:gap-7">
             <MoviePoster movie={movie} />
             <div className="min-w-0 flex-1 pb-2">
               <div className="mb-3 flex gap-2"><span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[9px] text-white/48">Movie</span>{movie.contentRating && <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[9px] text-white/48">{movie.contentRating}</span>}</div>

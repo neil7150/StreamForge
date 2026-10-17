@@ -15,7 +15,7 @@ function CatalogCard({ title, image, subtitle, onClick }: {
     <button onClick={onClick} className="group min-w-0 text-left">
       <div className="flex aspect-[2/3] items-center justify-center overflow-hidden rounded-xl border border-white/[0.07] bg-[#171a1c] transition group-hover:-translate-y-1 group-hover:border-white/20">
         {image && !failed
-          ? <img src={image} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="h-full w-full object-cover" />
+          ? <img src={image} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="h-full w-full object-cover" />
           : <Film className="h-7 w-7 text-white/12" />}
       </div>
       <h3 className="mt-2.5 truncate text-[11px] font-medium text-white/65 group-hover:text-white/90">{title}</h3>
@@ -112,7 +112,7 @@ export default function Browse() {
   }, [request])
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto max-w-[1240px] px-10 pb-14 pt-9">
         <header className="flex items-end justify-between">
           <div><h1 className="text-[22px] font-semibold text-white/90">Browse</h1><p className="mt-1.5 text-[11px] text-white/32">Popular movies and shows, updated from the catalog.</p></div>

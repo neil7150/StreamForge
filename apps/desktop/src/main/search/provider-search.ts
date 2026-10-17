@@ -1,4 +1,4 @@
-import { net, session } from 'electron'
+import { session } from 'electron'
 import {
   buildMagnetURI,
   decodeXmlText,
@@ -25,8 +25,11 @@ import {
   parseKnabenPayload,
   parseStremioStreamPayload,
   parseSubsPleasePayload,
-  parseTokyoToshoFeed
+  parseTokyoToshoFeed,
+  parseTorrentsCsvPayload
 } from './provider-parsers'
+import { adaptTorrentsCsvQueries } from './episode-search-policy'
+import { enrichPlaceholderSwarmCounts } from './tracker-scraper'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -43,7 +46,9 @@ const YTS_BASE_URLS = ['https://yts.mx', 'https://yts.bz', 'https://yts.lt', 'ht
 let preferredYTSBaseURL = YTS_BASE_URLS[0]
 const TOKYO_TOSHO_BASE_URLS = ['https://tokyotosho.info', 'https://www.tokyotosho.info']
 let preferredTokyoToshoBaseURL = TOKYO_TOSHO_BASE_URLS[0]
-const X1337_BASE_URLS = ['https://1337x.to', 'https://1337x.st', 'https://x1337x.ws', 'https://x1337x.eu', 'https://x1337x.cc']
+// Never add a mirror without checking that its search page contains real result rows.
+// 1337x.is is a parked "domain for sale" page that returns HTTP 200 with ad scripts.
+const X1337_BASE_URLS = ['https://1337x.to', 'https://1337x.st']
 let preferred1337xBaseURL = X1337_BASE_URLS[0]
 const ANIDEX_BASE_URLS = ['https://anidex.info']
 let preferredAniDexBaseURL = ANIDEX_BASE_URLS[0]
@@ -169,9 +174,10 @@ async function fetchJSON(url: string): Promise<unknown> {
 }
 
 /**
- * Dedicated Electron session for provider scraping with disk cache DISABLED.
- * This prevents Chromium from writing scraped torrent-site HTML/JS to
- * AppData\Roaming\streamforge-desktop\Cache\Cache_Data\, which would
+ * Dedicated in-memory Electron session for provider scraping.
+ * The partition name has no 'persist:' prefix, so it never touches disk, and the
+ * HTTP cache is disabled as well. This keeps scraped torrent-site HTML/JS out of
+ * AppData\Roaming\streamforge-desktop\Cache\Cache_Data\, which would otherwise
  * trigger Windows Defender false positives on embedded ad scripts.
  *
  * Lazy-initialized because session.fromPartition() requires app.isReady().
@@ -190,14 +196,14 @@ function providerFetch(input: string | URL | Request, init?: RequestInit): Promi
   if (!headers.has('User-Agent')) {
     headers.set('User-Agent', BROWSER_USER_AGENT)
   }
-  // Use Chromium's net.fetch with a dedicated no-cache session so that:
+  // Session.fetch (NOT net.fetch, which ignores any `session` option and always uses
+  // the default disk-cached session) so that:
   // 1. Requests carry an authentic Chrome TLS fingerprint (bypasses Cloudflare)
   // 2. Scraped torrent-site HTML is NEVER written to disk (prevents Defender alerts)
   if (process.versions.electron) {
-    const opts = { ...init, headers, session: getScraperSession() } as Record<string, unknown>
-    return net.fetch(
+    return getScraperSession().fetch(
       input instanceof URL ? input.toString() : input as string,
-      opts as Parameters<typeof net.fetch>[1]
+      { ...init, headers }
     )
   }
   return fetch(input, { ...init, headers })
@@ -329,6 +335,8 @@ async function searchKnaben(query: string): Promise<TorrentSearchResult[]> {
   return parseKnabenPayload(await response.json())
 }
 
+const PUBLIC_TORRENTIO_MANIFEST_URL = 'https://torrentio.strem.fun/manifest.json'
+
 function stremioStreamURL(manifestURL: string, videoId: string): string {
   const url = new URL(manifestURL)
   url.pathname = url.pathname.replace(/\/?manifest\.json\/?$/i, '').replace(/\/$/, '')
@@ -338,7 +346,12 @@ function stremioStreamURL(manifestURL: string, videoId: string): string {
 
 async function searchStremioAddons(_query: string, config: SourceProviderConfig): Promise<TorrentSearchResult[]> {
   if (!config.imdbId || config.seasonNumber === undefined || config.episodeNumber === undefined) return []
-  const endpoints = config.stremioAddonUrls ?? []
+  const userEndpoints = config.stremioAddonUrls ?? []
+  const includeTorrentio = config.torrentioEnabled !== false
+  const endpoints = [
+    ...userEndpoints,
+    ...(includeTorrentio && !userEndpoints.includes(PUBLIC_TORRENTIO_MANIFEST_URL) ? [PUBLIC_TORRENTIO_MANIFEST_URL] : [])
+  ]
   if (endpoints.length === 0) return []
   const videoId = `${config.imdbId}:${config.seasonNumber}:${config.episodeNumber}`
   const searches = await Promise.allSettled(endpoints.map(async (endpoint, index) => (
@@ -626,6 +639,29 @@ async function searchAniDex(query: string): Promise<TorrentSearchResult[]> {
   return parseAniDexFeed(text)
 }
 
+async function searchTorrentsCSV(query: string): Promise<TorrentSearchResult[]> {
+  const queries = adaptTorrentsCsvQueries(query)
+  if (queries.length === 1) {
+    const payload = await fetchJSON(`https://torrents-csv.com/service/search?q=${encodeURIComponent(query)}`)
+    return parseTorrentsCsvPayload(payload)
+  }
+
+  const outcomes = await Promise.allSettled(
+    queries.map(async (q) => {
+      const payload = await fetchJSON(`https://torrents-csv.com/service/search?q=${encodeURIComponent(q)}`)
+      return parseTorrentsCsvPayload(payload)
+    })
+  )
+
+  const fulfilled = outcomes.filter((r): r is PromiseFulfilledResult<TorrentSearchResult[]> => r.status === 'fulfilled')
+  if (fulfilled.length === 0) {
+    const rejected = outcomes.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    throw rejected?.reason instanceof Error ? rejected.reason : new Error('Torrents-CSV search failed')
+  }
+
+  return deduplicateResults(fulfilled.flatMap((r) => r.value))
+}
+
 /*
  * Keep provider functions explicit: each has independent health and cooldown state,
  * while Torznab aggregates the user's configured Prowlarr/Jackett endpoints.
@@ -643,7 +679,8 @@ const PROVIDER_SEARCHES: Record<TorrentProviderName, (query: string, config: Sou
   Torznab: searchTorznab,
   StremioAddon: searchStremioAddons,
   InternetArchive: searchInternetArchive,
-  '1337x': search1337x
+  '1337x': search1337x,
+  TorrentsCSV: searchTorrentsCSV
 }
 
 async function executeProviderSearch(
@@ -656,8 +693,11 @@ async function executeProviderSearch(
     runProvider(name, () => PROVIDER_SEARCHES[name](query, config))
   )))
 
+  let flatResults = outcomes.flatMap((outcome) => outcome.results)
+  flatResults = await enrichPlaceholderSwarmCounts(flatResults)
+
   const response: TorrentSearchResponse = {
-    results: deduplicateResults(outcomes.flatMap((outcome) => outcome.results)),
+    results: deduplicateResults(flatResults),
     providers: outcomes.map((outcome) => outcome.status),
     cache: 'miss'
   }
@@ -683,7 +723,8 @@ export async function searchTorrentProviders(
   const uniqueProviders = [...new Set(providers)]
   const torznabUrls = config.torznabEndpoints?.map((endpoint) => endpoint.url).join('|') || config.torznabUrl || ''
   const addonUrls = config.stremioAddonUrls?.join('|') || ''
-  const cacheKey = `${uniqueProviders.join(',')}:${config.imdbId || ''}:${torznabUrls}:${addonUrls}:${config.seasonNumber ?? ''}:${config.episodeNumber ?? ''}:${query}`
+  const torrentioKey = config.torrentioEnabled !== false ? 'tio:1' : 'tio:0'
+  const cacheKey = `${uniqueProviders.join(',')}:${config.imdbId || ''}:${torznabUrls}:${addonUrls}:${torrentioKey}:${config.seasonNumber ?? ''}:${config.episodeNumber ?? ''}:${query}`
   const fresh = searchCache.getFresh(cacheKey)
   if (fresh) {
     return {

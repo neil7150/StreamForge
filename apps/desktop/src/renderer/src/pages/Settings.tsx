@@ -104,7 +104,7 @@ export default function Settings() {
   }, [refreshCacheSize])
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-[860px] px-10 pb-14 pt-9">
         <header className="flex items-end justify-between"><div><h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Settings</h1><p className="mt-1.5 text-[11px] text-white/32">Tune source selection, playback, subtitles, and storage.</p></div><button onClick={resetSettings} className="flex items-center gap-1.5 text-[10px] text-white/30 hover:text-white/65"><RotateCcw className="h-3 w-3" /> Reset playback</button></header>
 
@@ -260,9 +260,10 @@ export default function Settings() {
             <SettingRow label="Maximum stream size" description="Use 0 for no limit."><div className="flex items-center gap-2"><input type="number" min="0" step="0.5" value={playback.maxStreamSizeGb} onChange={(event) => update('maxStreamSizeGb', Number(event.target.value))} className="w-24 rounded-lg border border-white/[0.09] bg-[#171a1c] px-2.5 py-2 text-[10px] text-white/62 outline-none" /><span className="text-[9px] text-white/28">GB</span></div></SettingRow>
             <ToggleRow label="Prefer direct play" description="Prefer H.264/AAC sources that avoid conversion." checked={playback.preferDirectPlay} onChange={(value) => update('preferDirectPlay', value)} />
             <ToggleRow label="Automatic source fallback" description="Try the next ranked source when startup fails." checked={playback.automaticSourceFallback} onChange={(value) => update('automaticSourceFallback', value)} />
-            <SettingRow label="Built-in providers" description="Movies, television, anime archives, and public media are searched automatically."><span className="max-w-80 text-right text-[10px] leading-5 text-teal-200/55">YTS · EZTV · Knaben · APIBay · Nyaa · Anime Tosho · Tokyo Toshokan · Internet Archive</span></SettingRow>
+            <SettingRow label="Built-in providers" description="Movies, television, anime archives, and public media are searched automatically."><span className="max-w-80 text-right text-[10px] leading-5 text-teal-200/55">YTS · EZTV · Knaben · APIBay · Nyaa · Anime Tosho · Tokyo Toshokan · Torrents-CSV · Internet Archive</span></SettingRow>
+            <ToggleRow label="Torrentio public streams" description="Search public Torrentio streams for series episodes using IMDb IDs." checked={playback.torrentioEnabled} onChange={(value) => update('torrentioEnabled', value)} />
             <ToggleRow label="Prowlarr / Jackett" description="Search up to eight Torznab endpoints alongside built-in providers." checked={playback.torznabEnabled} onChange={(value) => update('torznabEnabled', value)} />
-            {playback.torznabEnabled && <SettingRow label="Torznab endpoints" description="Add complete Torznab API URLs. Keys stay on this device and are sent only to their endpoint."><div className="flex w-[390px] flex-col gap-2">
+            {playback.torznabEnabled && <SettingRow label="Torznab endpoints" description="Add complete Torznab API URLs. Keys stay on this device and are sent only to their endpoint."><div className="flex w-full max-w-[390px] flex-col gap-2">
               {playback.torznabEndpoints.map((endpoint, index) => <div key={index} className="flex items-center gap-2">
                 <input type="url" value={endpoint.url} placeholder="http://localhost:9696/1/api" onChange={(event) => updateTorznabEndpoint(index, 'url', event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/[0.09] bg-[#171a1c] px-2.5 py-2 text-[10px] text-white/62 outline-none" />
                 <input type="password" value={endpoint.apiKey} placeholder="API key" onChange={(event) => updateTorznabEndpoint(index, 'apiKey', event.target.value)} className="w-24 rounded-lg border border-white/[0.09] bg-[#171a1c] px-2.5 py-2 text-[10px] text-white/62 outline-none" />
@@ -271,7 +272,7 @@ export default function Settings() {
               {playback.torznabEndpoints.length < 8 && <button onClick={() => update('torznabEndpoints', [...playback.torznabEndpoints, { url: '', apiKey: '' }])} className="flex h-8 items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/[0.1] text-[10px] text-white/35 hover:bg-white/[0.04] hover:text-white/60"><Plus className="h-3 w-3" /> Add endpoint</button>}
             </div></SettingRow>}
             <ToggleRow label="Stremio-compatible addons" description="Use torrent streams from self-hosted Comet, MediaFusion, or another compatible addon." checked={playback.stremioAddonEnabled} onChange={(value) => update('stremioAddonEnabled', value)} />
-            {playback.stremioAddonEnabled && <SettingRow label="Addon manifests" description="Add configured manifest.json URLs. Only torrent info-hash streams are used."><div className="flex w-[390px] flex-col gap-2">
+            {playback.stremioAddonEnabled && <SettingRow label="Addon manifests" description="Add configured manifest.json URLs. Only torrent info-hash streams are used."><div className="flex w-full max-w-[390px] flex-col gap-2">
               {playback.stremioAddonUrls.map((url, index) => <div key={index} className="flex items-center gap-2">
                 <input type="url" value={url} placeholder="https://your-addon.example/config/manifest.json" onChange={(event) => updateStremioAddonUrl(index, event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/[0.09] bg-[#171a1c] px-2.5 py-2 text-[10px] text-white/62 outline-none" />
                 <button aria-label={`Remove Stremio addon ${index + 1}`} onClick={() => update('stremioAddonUrls', playback.stremioAddonUrls.filter((_, urlIndex) => urlIndex !== index))} className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] text-white/28 hover:text-red-300"><X className="h-3 w-3" /></button>
@@ -330,9 +331,9 @@ export default function Settings() {
 }
 
 function SettingRow({ label, description, children }: { label: string; description: string; children: React.ReactNode }) {
-  return <div className="flex items-center gap-5 py-4"><div className="min-w-0 flex-1"><p className="text-[11px] text-white/62">{label}</p><p className="mt-1 text-[9px] text-white/25">{description}</p></div>{children}</div>
+  return <div className="setting-row flex flex-wrap items-center gap-5 py-5"><div className="min-w-[180px] flex-1"><p className="text-[13px] font-medium text-white/80">{label}</p><p className="mt-1 text-[11px] leading-5 text-white/50">{description}</p></div>{children}</div>
 }
 
 function ToggleRow({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <SettingRow label={label} description={description}><button role="switch" aria-checked={checked} onClick={() => onChange(!checked)} className={`relative h-5 w-9 rounded-full transition ${checked ? 'bg-teal-400/75' : 'bg-white/10'}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${checked ? 'left-[18px]' : 'left-0.5'}`} /></button></SettingRow>
+  return <SettingRow label={label} description={description}><button role="switch" aria-label={label} aria-checked={checked} onClick={() => onChange(!checked)} className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-teal-400/75' : 'bg-white/15'}`}><span className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform duration-150 ${checked ? 'translate-x-5' : 'translate-x-0'}`} /></button></SettingRow>
 }

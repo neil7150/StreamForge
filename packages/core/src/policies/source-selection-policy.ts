@@ -45,9 +45,9 @@ function providerReliabilityBoost(provider?: string): number {
     case 'YTS': return 110
     case 'EZTV': return 100
     case '1337x': return 90
-    case 'TorrentGalaxy': return 90
     case 'Nyaa': return 90
     case 'Knaben': return 70
+    case 'TorrentsCSV': return 70
     case 'TokyoTosho': return 60
     default: return 30
   }

@@ -26,6 +26,7 @@ export interface PlaybackSettings {
   torznabEndpoints: TorznabEndpointSetting[]
   stremioAddonEnabled: boolean
   stremioAddonUrls: string[]
+  torrentioEnabled: boolean
 }
 
 interface PlaybackSettingsState extends PlaybackSettings {
@@ -52,7 +53,8 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   torznabEnabled: false,
   torznabEndpoints: [],
   stremioAddonEnabled: false,
-  stremioAddonUrls: []
+  stremioAddonUrls: [],
+  torrentioEnabled: true
 }
 
 function loadSettings(): PlaybackSettings {
@@ -70,7 +72,12 @@ function loadSettings(): PlaybackSettings {
     const torznabEndpoints = savedEndpoints.length > 0
       ? savedEndpoints
       : (saved.torznabUrl ? [{ url: saved.torznabUrl, apiKey: saved.torznabApiKey || '' }] : [])
-    return { ...DEFAULT_PLAYBACK_SETTINGS, ...saved, torznabEndpoints }
+    return {
+      ...DEFAULT_PLAYBACK_SETTINGS,
+      ...saved,
+      torznabEndpoints,
+      torrentioEnabled: saved.torrentioEnabled ?? DEFAULT_PLAYBACK_SETTINGS.torrentioEnabled
+    }
   } catch {
     return DEFAULT_PLAYBACK_SETTINGS
   }
@@ -111,7 +118,8 @@ export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set) => (
       torznabEnabled: partial.torznabEnabled ?? state.torznabEnabled,
       torznabEndpoints: (partial.torznabEndpoints ?? state.torznabEndpoints).slice(0, 8),
       stremioAddonEnabled: partial.stremioAddonEnabled ?? state.stremioAddonEnabled,
-      stremioAddonUrls: (partial.stremioAddonUrls ?? state.stremioAddonUrls).slice(0, 8)
+      stremioAddonUrls: (partial.stremioAddonUrls ?? state.stremioAddonUrls).slice(0, 8),
+      torrentioEnabled: partial.torrentioEnabled ?? state.torrentioEnabled
     }
     persist(next)
     return next

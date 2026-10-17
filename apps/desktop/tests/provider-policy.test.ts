@@ -8,6 +8,7 @@ import {
   decodeXmlText,
   deduplicateResults,
   extractInfoHashFromMagnet,
+  normalizeInfoHash,
   parseFileSize,
   sourceQualityScore,
   type TorrentSearchResult
@@ -15,6 +16,7 @@ import {
 
 const HASH_A = '0123456789abcdef0123456789abcdef01234567'
 const HASH_B = '89abcdef0123456789abcdef0123456789abcdef'
+const HASH_A_BASE32 = 'AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH'
 
 function result(hash: string, seeders: number, provider: 'APIBay' | 'Nyaa'): TorrentSearchResult {
   return {
@@ -43,6 +45,18 @@ test('builds magnets only from valid hexadecimal info hashes', () => {
   assert.equal(extractInfoHashFromMagnet('magnet:?xt=urn:btih:'), null)
 })
 
+test('normalizes base32 info hashes to hexadecimal', () => {
+  assert.equal(normalizeInfoHash(HASH_A_BASE32), HASH_A)
+  assert.equal(normalizeInfoHash(HASH_A_BASE32.toLowerCase()), HASH_A)
+  assert.equal(extractInfoHashFromMagnet(`magnet:?xt=urn:btih:${HASH_A_BASE32}&dn=Example`), HASH_A)
+  assert.equal(extractInfoHashFromMagnet(`magnet:?dn=Example&xt=urn:btih:${HASH_A_BASE32}`), HASH_A)
+  assert.equal(extractInfoHashFromMagnet(`magnet:?xt=urn%3Abtih%3A${HASH_A_BASE32}&dn=Example`), HASH_A)
+  assert.equal(extractInfoHashFromMagnet(`xt=urn%3Abtih%3A${HASH_A_BASE32}`), HASH_A)
+  assert.equal(buildMagnetURI(HASH_A_BASE32, 'Example')?.includes(`btih:${HASH_A}`), true)
+  // 32 chars but contains invalid base32 digits (0, 1, 8, 9)
+  assert.equal(normalizeInfoHash('01890189018901890189018901890189'), null)
+})
+
 test('adds fallback trackers without breaking WebTorrent magnet parsing', async () => {
   const savedMagnet = `magnet:?xt=urn:btih:${HASH_A}&tr=${encodeURIComponent('http://tracker.qu.ax:6969/announce')}`
   const updated = appendFallbackTrackers(savedMagnet)
@@ -53,6 +67,11 @@ test('adds fallback trackers without breaking WebTorrent magnet parsing', async 
   assert.equal(extractInfoHashFromMagnet(updated), HASH_A)
   assert.match(updated, /xt=urn:btih:/)
   assert.equal((await parseTorrent(updated)).infoHash, HASH_A)
+
+  const base32Magnet = `magnet:?xt=urn:btih:${HASH_A_BASE32}&dn=Example`
+  const base32Updated = appendFallbackTrackers(base32Magnet)
+  assert.equal(extractInfoHashFromMagnet(base32Updated), HASH_A)
+  assert.equal((await parseTorrent(base32Updated)).infoHash, HASH_A)
 })
 
 test('deduplicates providers by hash and keeps the healthier result', () => {

@@ -33,7 +33,7 @@ function Poster({ title, url, rating, badge }: {
         <img
           src={url ?? undefined}
           alt={`${title} poster`}
-          loading="lazy"
+          loading="lazy" decoding="async"
           draggable={false}
           referrerPolicy="no-referrer"
           onError={() => setImageFailed(true)}
@@ -235,7 +235,7 @@ export default function Search() {
   const totalResults = movieResults.length + seriesResults.length
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-[1160px] px-10 pb-14 pt-9">
         <header>
           <h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Discover</h1>
@@ -265,7 +265,7 @@ export default function Search() {
                   </div>
                   <span className="rounded-full bg-amber-200/[0.08] px-2.5 py-1 text-[9px] font-medium text-amber-100/55">{movieResults.length} found</span>
                 </div>
-                <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{movieResults.map((movie) => <MovieCard key={movie.id} movie={movie} onSelect={() => navigate(`/movie/${encodeURIComponent(movie.id)}`, { state: { movie, fromQuery: query } })} />)}</div>
+                <div className="catalog-grid">{movieResults.map((movie) => <MovieCard key={movie.id} movie={movie} onSelect={() => navigate(`/movie/${encodeURIComponent(movie.id)}`, { state: { movie, fromQuery: query } })} />)}</div>
               </section>
             )}
             {seriesResults.length > 0 && (
@@ -280,7 +280,7 @@ export default function Search() {
                   </div>
                   <span className="rounded-full bg-sky-200/[0.08] px-2.5 py-1 text-[9px] font-medium text-sky-100/55">{seriesResults.length} found</span>
                 </div>
-                <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{seriesResults.map((series) => <SeriesCard key={series.id} series={series} onSelect={() => navigate(`/series/${series.id}`, { state: { series, fromQuery: query } })} />)}</div>
+                <div className="catalog-grid">{seriesResults.map((series) => <SeriesCard key={series.id} series={series} onSelect={() => navigate(`/series/${series.id}`, { state: { series, fromQuery: query } })} />)}</div>
               </section>
             )}
           </div>

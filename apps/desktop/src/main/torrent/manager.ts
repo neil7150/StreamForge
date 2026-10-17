@@ -19,7 +19,7 @@ import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import type { Readable } from 'node:stream'
 import { app } from 'electron'
-import { appendFallbackTrackers } from '../search/provider-policy'
+import { appendFallbackTrackers, extractInfoHashFromMagnet, normalizeInfoHash } from '../search/provider-policy'
 import { findPreferredEpisodeFile, type PreferredEpisodeFile } from './episode-file-policy'
 import {
   buildPeerConnectionDiagnostics,
@@ -388,9 +388,10 @@ export class TorrentManager extends EventEmitter {
    * same torrent releases WebTorrent's single-torrent reservation.
    */
   async queueDownload(magnetURI: string, activeStreamInfoHash?: string): Promise<QueuedDownloadResult> {
-    const hashMatch = magnetURI.match(/btih:([a-fA-F0-9]{40})/i)
-      || magnetURI.match(/btih:([a-zA-Z2-7]{32})/i)
-    const requestedHash = activeStreamInfoHash?.toLowerCase() ?? hashMatch?.[1]?.toLowerCase()
+    // Normalizes both hex and base32 btih topics to the hex form WebTorrent uses.
+    const requestedHash = (activeStreamInfoHash ? normalizeInfoHash(activeStreamInfoHash) ?? activeStreamInfoHash.toLowerCase() : null)
+      ?? extractInfoHashFromMagnet(magnetURI)
+      ?? undefined
     const activeStream = requestedHash
       ? this.client.torrents.find((torrent) => {
           if (torrent.infoHash.toLowerCase() !== requestedHash) return false
@@ -810,10 +811,8 @@ export class TorrentManager extends EventEmitter {
     const targetPath = mode === 'stream' ? this.streamPath : this.downloadPath
 
     return new Promise((resolve, reject) => {
-      // Extract info hash for robust duplicate detection
-      const hashMatch = magnetURI.match(/btih:([a-fA-F0-9]{40})/i)
-        || magnetURI.match(/btih:([a-zA-Z2-7]{32})/i)
-      const incomingHash = hashMatch ? hashMatch[1].toLowerCase() : null
+      // Normalizes both hex and base32 btih topics to the hex form WebTorrent uses.
+      const incomingHash = extractInfoHashFromMagnet(magnetURI)
 
       const waitForExistingTorrent = (candidate: ManagedTorrent): void => {
         if (preferredEpisode) this.pendingEpisodeFiles.set(candidate, preferredEpisode)

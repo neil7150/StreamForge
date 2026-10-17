@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  adaptTorrentsCsvQueries,
   buildEpisodeSearchQuery,
   buildAnimeAbsoluteSearchQueries,
   buildAnimeBatchSearchQueries,
@@ -129,3 +130,50 @@ test('searches verified anime batches and accepts only packs containing the epis
     ...batchRequest, absoluteEpisodeNumber: 220
   }), true)
 })
+
+test('adapts Torrents-CSV queries to strip episode tokens for candidate discovery', () => {
+  assert.deepEqual(adaptTorrentsCsvQueries('Breaking Bad S01E01'), [
+    'Breaking Bad S01E01',
+    'Breaking Bad S01',
+    'Breaking Bad'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries("Marvel's Agents of S.H.I.E.L.D. S02E05"), [
+    "Marvel's Agents of S.H.I.E.L.D. S02E05",
+    "Marvel's Agents of S.H.I.E.L.D. S02",
+    "Marvel's Agents of S.H.I.E.L.D."
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Example Show 1x02'), [
+    'Example Show 1x02',
+    'Example Show'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Studio 2x2 S01E01'), [
+    'Studio 2x2 S01E01',
+    'Studio 2x2 S01',
+    'Studio 2x2'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('1899 S01E01'), [
+    '1899 S01E01',
+    '1899 S01',
+    '1899'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Breaking Bad S01E01 1080p'), [
+    'Breaking Bad S01E01 1080p',
+    'Breaking Bad S01',
+    'Breaking Bad'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('3x3 Eyes 1x02'), [
+    '3x3 Eyes 1x02',
+    '3x3 Eyes'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Inception 2010'), [
+    'Inception 2010'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Naruto: Shippuden 220'), [
+    'Naruto: Shippuden 220'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('Bleach batch'), [
+    'Bleach batch'
+  ])
+  assert.deepEqual(adaptTorrentsCsvQueries('   '), [])
+})
+

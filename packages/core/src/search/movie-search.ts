@@ -20,7 +20,7 @@ export async function searchMovieTorrentProviders(
   const torznabEnabled = Boolean(request.torznabEndpoints?.length || request.torznabUrl)
   const response = await searchTorrentProviders(
     buildMovieSearchQuery(request),
-    ['YTS', '1337x', 'APIBay', 'Nyaa', 'InternetArchive', ...(torznabEnabled ? ['Torznab' as const] : [])],
+    ['YTS', 'APIBay', 'Nyaa', 'InternetArchive', 'TorrentsCSV', ...(torznabEnabled ? ['Torznab' as const] : [])],
     request
   )
   const results = response.results.filter((result) => (

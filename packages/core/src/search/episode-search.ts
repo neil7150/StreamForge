@@ -21,24 +21,27 @@ export async function searchEpisodeTorrentProviders(
 ): Promise<TorrentSearchResponse> {
   const torznabEnabled = Boolean(request.torznabEndpoints?.length || request.torznabUrl)
   const optionalTorznab = torznabEnabled ? ['Torznab' as const] : []
-  const optionalStremioAddon = request.imdbId && request.stremioAddonUrls?.length
+  const stremioAddonEnabled = Boolean(
+    request.imdbId && (request.stremioAddonUrls?.length || request.torrentioEnabled !== false)
+  )
+  const optionalStremioAddon = stremioAddonEnabled
     ? ['StremioAddon' as const]
     : []
   const standardPromise = request.absoluteEpisodeOnly ? Promise.resolve(null) : searchTorrentProviders(
     buildEpisodeSearchQuery(request),
-    ['Knaben', '1337x', 'APIBay', 'Nyaa', 'EZTV', ...optionalTorznab, ...optionalStremioAddon],
+    ['Knaben', 'APIBay', 'Nyaa', 'EZTV', 'TorrentsCSV', ...optionalTorznab, ...optionalStremioAddon],
     request
   )
   const animeQueries = buildAnimeAbsoluteSearchQueries(request)
   const animePromise = Promise.all(animeQueries.map((query) => searchTorrentProviders(
     query,
-    ['SubsPlease', 'AnimeTosho', '1337x', 'AniDex', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', ...optionalTorznab],
+    ['SubsPlease', 'AnimeTosho', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', 'TorrentsCSV', ...optionalTorznab],
     request
   )))
   const batchPromise = Promise.all(
     buildAnimeBatchSearchQueries(request).map((query) => searchTorrentProviders(
       query,
-      ['SubsPlease', 'AnimeTosho', '1337x', 'AniDex', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', ...optionalTorznab],
+      ['SubsPlease', 'AnimeTosho', 'Knaben', 'APIBay', 'Nyaa', 'TokyoTosho', 'TorrentsCSV', ...optionalTorznab],
       request
     ))
   )

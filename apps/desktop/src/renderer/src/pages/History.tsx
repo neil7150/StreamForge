@@ -46,7 +46,7 @@ export default function History() {
   const isEmpty = tab === 'recent' ? history.length === 0 : watchlist.length === 0
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-[1160px] px-10 pb-14 pt-9">
         <header className="flex items-end justify-between">
           <div><h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Library</h1><p className="mt-1.5 text-[11px] text-white/32">Recent playback and saved titles.</p></div>

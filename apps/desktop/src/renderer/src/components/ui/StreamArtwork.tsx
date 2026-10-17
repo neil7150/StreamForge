@@ -42,7 +42,7 @@ export default function StreamArtwork({
   return (
     <div className={clsx('relative overflow-hidden border border-white/[0.06]', className)} style={{ backgroundColor: palette.background }} aria-label={title}>
       {showImage ? (
-        <img src={imageUrl!} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImageFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+        <img src={imageUrl!} alt="" loading="lazy" decoding="async" draggable={false} referrerPolicy="no-referrer" onError={() => setImageFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
         <>
           <Film className="absolute left-4 top-4 h-4 w-4 text-white/22" />
@@ -56,7 +56,7 @@ export default function StreamArtwork({
         </>
       )}
       {showPlay && (
-        <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#151719]">
             <Play className="ml-0.5 h-3.5 w-3.5 fill-current" />
           </span>

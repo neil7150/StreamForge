@@ -149,7 +149,7 @@ function EpisodeStill({
         <img
           src={episode.stillUrl}
           alt=""
-          loading="lazy"
+          loading="lazy" decoding="async"
           draggable={false}
           referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
@@ -415,7 +415,8 @@ export default function SeriesDetail() {
           : undefined,
         stremioAddonUrls: playbackSettings.stremioAddonEnabled
           ? playbackSettings.stremioAddonUrls.map((url) => url.trim()).filter(Boolean)
-          : undefined
+          : undefined,
+        torrentioEnabled: playbackSettings.torrentioEnabled
       })
       if (requestId !== sourceRequestRef.current) return
       setSourceResults(response.results)
@@ -526,7 +527,7 @@ export default function SeriesDetail() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <header className="relative overflow-hidden border-b border-white/[0.06]">
         {(series.originalImageUrl || series.posterUrl) && (
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -541,11 +542,11 @@ export default function SeriesDetail() {
             <div className="absolute inset-0 bg-gradient-to-r from-[#101214] via-[#101214]/85 to-[#101214]/60" />
           </div>
         )}
-        <div className="relative mx-auto max-w-[1160px] px-10 pb-9 pt-7">
+        <div className="relative mx-auto max-w-[1160px] px-4 pb-9 pt-7 sm:px-7 lg:px-10">
           <button onClick={goBack} className="mb-7 flex items-center gap-2 text-[10px] text-white/38 hover:text-white/75">
             <ArrowLeft className="h-3.5 w-3.5" /> Back to search
           </button>
-          <div className="flex items-end gap-7">
+          <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-end sm:gap-7">
             <Poster title={series.title} url={series.posterUrl ?? series.originalImageUrl} />
             <div className="min-w-0 flex-1 pb-2">
               <div className="mb-3 flex flex-wrap items-center gap-2">

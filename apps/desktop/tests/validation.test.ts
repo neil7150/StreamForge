@@ -119,6 +119,18 @@ test('normalizes and bounds structured episode searches', () => {
     seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
     stremioAddonUrls: ['https://addon.example/config/not-a-manifest']
   }))
+  assert.equal(requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    torrentioEnabled: true
+  }).torrentioEnabled, true)
+  assert.equal(requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    torrentioEnabled: false
+  }).torrentioEnabled, false)
+  assert.throws(() => requireEpisodeSearchRequest({
+    seriesTitle: 'Show', seasonNumber: 1, episodeNumber: 2,
+    torrentioEnabled: 'not-a-boolean'
+  }))
 })
 
 test('validates preferred episode file selections', () => {

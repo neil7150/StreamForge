@@ -857,7 +857,8 @@ export default function Player() {
           : undefined,
         stremioAddonUrls: playbackSettings.stremioAddonEnabled
           ? playbackSettings.stremioAddonUrls.map((url) => url.trim()).filter(Boolean)
-          : undefined
+          : undefined,
+        torrentioEnabled: playbackSettings.torrentioEnabled
       })
       const ranked = rankSources(response.results, playbackSettings)
       if (ranked.length === 0) throw new Error('No exact source is available for the next episode.')
@@ -890,7 +891,8 @@ export default function Player() {
               : undefined,
             stremioAddonUrls: playbackSettings.stremioAddonEnabled
               ? playbackSettings.stremioAddonUrls.map((url) => url.trim()).filter(Boolean)
-              : undefined
+              : undefined,
+            torrentioEnabled: playbackSettings.torrentioEnabled
           })
           const upcomingSources = rankSources(upcomingResponse.results, playbackSettings)
           if (upcomingSources[0]) await addDownload(upcomingSources[0].magnetURI)

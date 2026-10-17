@@ -23,18 +23,41 @@ export interface SourceProviderConfig {
   torznabApiKey?: string
   torznabEndpoints?: TorznabEndpoint[]
   stremioAddonUrls?: string[]
+  torrentioEnabled?: boolean
   seasonNumber?: number
   episodeNumber?: number
 }
 
 
-const INFO_HASH_PATTERN = /^[a-fA-F0-9]{40}$/
+const INFO_HASH_HEX_PATTERN = /^[a-fA-F0-9]{40}$/
+const INFO_HASH_BASE32_PATTERN = /^[A-Za-z2-7]{32}$/
+
+function base32ToHex(value: string): string | null {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let buffer = 0
+  let bits = 0
+  let hex = ''
+
+  for (const character of value.toUpperCase()) {
+    const digit = alphabet.indexOf(character)
+    if (digit < 0) return null
+
+    buffer = (buffer << 5) | digit
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      hex += ((buffer >> bits) & 0xff).toString(16).padStart(2, '0')
+      buffer &= bits === 0 ? 0 : (1 << bits) - 1
+    }
+  }
+
+  return hex.length === 40 ? hex : null
+}
 
 export const TRACKERS = [
   // Tier-1 High-Uptime Public BitTorrent Trackers (ngosang / newTrackon curated)
   'udp://tracker.opentrackr.org:1337/announce',
   'udp://open.tracker.cl:1337/announce',
-  'udp://9.rarbg.com:2810/announce',
   'udp://tracker.openbittorrent.com:6969/announce',
   'udp://tracker.openbittorrent.com:80/announce',
   'udp://exodus.desync.com:6969/announce',
@@ -78,8 +101,10 @@ export function appendFallbackTrackers(magnetURI: string): string {
 
 export function normalizeInfoHash(value: unknown): string | null {
   if (typeof value !== 'string') return null
-  const normalized = value.trim().toLowerCase()
-  return INFO_HASH_PATTERN.test(normalized) ? normalized : null
+  const trimmed = value.trim()
+  if (INFO_HASH_HEX_PATTERN.test(trimmed)) return trimmed.toLowerCase()
+  if (INFO_HASH_BASE32_PATTERN.test(trimmed)) return base32ToHex(trimmed)
+  return null
 }
 
 export function extractInfoHashFromMagnet(value: unknown): string | null {
@@ -93,7 +118,7 @@ export function extractInfoHashFromMagnet(value: unknown): string | null {
   } catch {
     // Fall through to the tolerant raw-string matcher.
   }
-  const match = value.match(/(?:^|[?&])xt=urn:btih:([a-fA-F0-9]{40})(?:&|$)/i)
+  const match = value.match(/(?:^|[?&])xt=(?:urn:btih:|urn%3Abtih%3A)([a-fA-F0-9]{40}|[A-Za-z2-7]{32})(?:&|$)/i)
   return normalizeInfoHash(match?.[1])
 }
 

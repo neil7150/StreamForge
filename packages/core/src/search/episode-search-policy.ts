@@ -185,3 +185,28 @@ export function matchesEpisodeRelease(
     && tokens[0].season === request.seasonNumber
     && tokens[0].episode === request.episodeNumber
 }
+
+export function adaptTorrentsCsvQueries(query: string): string[] {
+  const trimmed = query.trim()
+  if (!trimmed) return []
+
+  const queries = [trimmed]
+  const matches = [...trimmed.matchAll(/(?:[\s._-]s(\d{1,3})[\s._-]*e\d{1,3}|[\s._-](\d{1,3})x\d{1,3})/gi)]
+  if (matches.length > 0) {
+    const last = matches[matches.length - 1]
+    const prefix = trimmed.slice(0, last.index).trim()
+    if (prefix) {
+      if (last[1]) {
+        const season = last[1].padStart(2, '0')
+        const seasonQuery = `${prefix} S${season}`
+        if (!queries.includes(seasonQuery)) {
+          queries.push(seasonQuery)
+        }
+      }
+      if (!queries.includes(prefix)) {
+        queries.push(prefix)
+      }
+    }
+  }
+  return queries
+}

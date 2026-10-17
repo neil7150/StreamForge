@@ -48,6 +48,7 @@ export type TorrentProviderName =
   | 'StremioAddon'
   | 'InternetArchive'
   | '1337x'
+  | 'TorrentsCSV'
 
 export interface TorrentSearchResult {
   id: string
@@ -94,6 +95,7 @@ export interface EpisodeTorrentSearchRequest {
   torznabApiKey?: string
   torznabEndpoints?: Array<{ url: string; apiKey?: string }>
   stremioAddonUrls?: string[]
+  torrentioEnabled?: boolean
 }
 
 export interface MovieTorrentSearchRequest {

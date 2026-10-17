@@ -13,6 +13,7 @@ function requireOptionalSourceConfig(request: Record<string, unknown>): {
   torznabApiKey?: string
   torznabEndpoints?: Array<{ url: string; apiKey?: string }>
   stremioAddonUrls?: string[]
+  torrentioEnabled?: boolean
 } {
   let imdbId: string | undefined
   if (request.imdbId !== undefined && request.imdbId !== null && request.imdbId !== '') {
@@ -86,12 +87,22 @@ function requireOptionalSourceConfig(request: Record<string, unknown>): {
       return parsed.toString()
     })
   }
+
+  let torrentioEnabled: boolean | undefined
+  if (request.torrentioEnabled !== undefined && request.torrentioEnabled !== null) {
+    if (typeof request.torrentioEnabled !== 'boolean') {
+      throw new TypeError('Invalid torrentioEnabled')
+    }
+    torrentioEnabled = request.torrentioEnabled
+  }
+
   return {
     ...(imdbId ? { imdbId } : {}),
     ...(torznabUrl ? { torznabUrl } : {}),
     ...(torznabApiKey ? { torznabApiKey } : {}),
     ...(torznabEndpoints?.length ? { torznabEndpoints } : {}),
-    ...(stremioAddonUrls?.length ? { stremioAddonUrls } : {})
+    ...(stremioAddonUrls?.length ? { stremioAddonUrls } : {}),
+    ...(torrentioEnabled !== undefined ? { torrentioEnabled } : {})
   }
 }
 

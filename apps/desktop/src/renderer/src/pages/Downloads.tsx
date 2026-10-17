@@ -7,8 +7,6 @@ import { formatBytes, formatSpeed } from '../lib/utils'
 export default function Downloads() {
   const navigate = useNavigate()
   const downloads = useTorrentStore((state) => state.downloads)
-  const progress = useTorrentStore((state) => state.progress)
-  const removeTorrent = useTorrentStore((state) => state.removeTorrent)
   const loadDownloads = useTorrentStore((state) => state.loadDownloads)
 
   useEffect(() => { if (window.torrentAPI) void loadDownloads() }, [loadDownloads])
@@ -20,7 +18,7 @@ export default function Downloads() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="page-enter h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-[1040px] px-10 pb-14 pt-9">
         <header className="flex items-end justify-between">
           <div><h1 className="text-[22px] font-semibold tracking-[-0.025em] text-white/90">Downloads</h1><p className="mt-1.5 text-[11px] text-white/32">{items.length} saved transfer{items.length === 1 ? '' : 's'}</p></div>
@@ -34,12 +32,24 @@ export default function Downloads() {
           </section>
         ) : (
           <section className="mt-8 divide-y divide-white/[0.055] border-y border-white/[0.06]">
-            {items.map((torrent) => {
-              const stats = progress.get(torrent.infoHash)
-              const percent = Math.min(100, Math.max(0, (stats?.progress ?? 0) * 100))
-              const complete = percent >= 99.9
-              return (
-                <article key={torrent.infoHash} className="group py-5">
+            {items.map((torrent) => <DownloadRow key={torrent.infoHash} infoHash={torrent.infoHash} />)}
+          </section>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function DownloadRow({ infoHash }: { infoHash: string }) {
+  const navigate = useNavigate()
+  const torrent = useTorrentStore((state) => state.downloads.get(infoHash))
+  const stats = useTorrentStore((state) => state.progress.get(infoHash))
+  const removeTorrent = useTorrentStore((state) => state.removeTorrent)
+  if (!torrent) return null
+  const percent = Math.min(100, Math.max(0, (stats?.progress ?? 0) * 100))
+  const complete = percent >= 99.9
+  return (
+                <article className="group py-5">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] text-white/28">{complete ? <Check className="h-4 w-4 text-teal-300" /> : <Download className="h-4 w-4" />}</div>
                     <div className="min-w-0 flex-1">
@@ -57,11 +67,5 @@ export default function Downloads() {
                     <button onClick={() => void removeTorrent(torrent.infoHash)} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/18 opacity-0 hover:bg-white/[0.05] hover:text-red-300 group-hover:opacity-100" title="Remove transfer"><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 </article>
-              )
-            })}
-          </section>
-        )}
-      </main>
-    </div>
   )
 }

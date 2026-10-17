@@ -108,24 +108,3 @@ function base32ToHex(value: string): string | null {
 
   return hex.length === 40 ? hex : null
 }
-
-/**
- * Get the appropriate video MIME type for a given filename.
- */
-export function getVideoMimeType(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  const mimeMap: Record<string, string> = {
-    mp4: 'video/mp4',
-    webm: 'video/webm',
-    ogg: 'video/ogg',
-    ogv: 'video/ogg',
-    mkv: 'video/x-matroska',
-    avi: 'video/x-msvideo',
-    mov: 'video/quicktime',
-    m4v: 'video/mp4',
-    ts: 'video/mp2t',
-    wmv: 'video/x-ms-wmv',
-    flv: 'video/x-flv'
-  }
-  return mimeMap[ext] ?? 'video/mp4'
-}
