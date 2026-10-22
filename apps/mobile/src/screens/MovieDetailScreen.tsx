@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -19,8 +19,9 @@ import { api } from '@streamforge/core/clients'
 import { useUserDataStore, usePlaybackSettingsStore } from '@streamforge/core/stores'
 import { rankSources } from '@streamforge/core/policies'
 import { searchMovieTorrents } from '@streamforge/core/search'
-import { extractInfoHash, getMovieBySlug as getMockMovieBySlug } from '@streamforge/core/utils'
+import { extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult } from '@streamforge/core/types'
+import { RequestGate } from '../data/request-gate'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MovieDetail'>
 
@@ -32,6 +33,9 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
   const [isLoading, setIsLoading] = useState(true)
   const [isSearchingSources, setIsSearchingSources] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const detailsRequests = useRef(new RequestGate())
+  const sourceRequests = useRef(new RequestGate())
 
   const watchlist = useUserDataStore((s) => s.watchlist)
   const addToWatchlist = useUserDataStore((s) => s.addToWatchlist)
@@ -41,8 +45,15 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
   const isSaved = movie ? watchlist.some((w) => w.movieId === (movie.id || movie.slug)) : false
 
   const loadMovie = useCallback(async () => {
+    const request = detailsRequests.current.begin()
+    sourceRequests.current.cancel()
+    setMovie(null)
+    setSources([])
+    setIsLoading(true)
+    setLoadError(null)
     try {
-      const res = await api.getMovieBySlug(slug)
+      const res = await api.getMovieBySlug(slug, request.signal)
+      if (!request.isCurrent()) return
       if (res?.data) {
         setMovie(res.data)
         // If movie has magnets attached from backend catalog
@@ -50,12 +61,12 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
         if (magnetList?.length) {
           const mapped: TorrentSearchResult[] = magnetList.map((m: any) => ({
             id: m.id || m.info_hash,
-            name: `${res.data.title} [${m.quality || '1080p'}]`,
+            name: `${res.data.title}${m.quality ? ` [${m.quality}]` : ''}`,
             magnetURI: m.magnet_uri,
-            seeders: m.seed_count ?? 10,
-            leechers: m.peer_count ?? 2,
-            size: m.file_size_bytes ? `${(m.file_size_bytes / 1024 / 1024 / 1024).toFixed(1)} GB` : '1.5 GB',
-            sizeBytes: m.file_size_bytes || 1610612736,
+            seeders: m.seed_count ?? 0,
+            leechers: m.peer_count ?? 0,
+            size: m.file_size_bytes ? `${(m.file_size_bytes / 1024 / 1024 / 1024).toFixed(1)} GB` : 'Unknown',
+            sizeBytes: m.file_size_bytes || 0,
             category: 'Movies',
             added: new Date().toISOString(),
             provider: 'StreamForge' as any
@@ -63,24 +74,27 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
           setSources(mapped)
         }
       } else {
-        const mock = getMockMovieBySlug(slug)
-        if (mock) setMovie(mock)
+        setMovie(null)
+        setLoadError('Movie not found.')
       }
     } catch {
-      const mock = getMockMovieBySlug(slug)
-      if (mock) setMovie(mock)
+      if (!request.isCurrent()) return
+      setMovie(null)
+      setLoadError('Could not load this movie. Check your connection and retry.')
     } finally {
-      setIsLoading(false)
+      if (request.isCurrent()) setIsLoading(false)
     }
   }, [slug])
 
   useEffect(() => {
     loadMovie()
+    return () => { detailsRequests.current.cancel(); sourceRequests.current.cancel() }
   }, [loadMovie])
 
   // Automatically search torrent swarms if sources are empty
   const fetchLiveSources = useCallback(async () => {
     if (!movie) return
+    const request = sourceRequests.current.begin()
     setIsSearchingSources(true)
     try {
       const year = movie.year || (movie.release_date ? new Date(movie.release_date).getFullYear() : undefined)
@@ -89,14 +103,14 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
         year,
         imdbId: movie.imdb_id
       })
-      if (res.results?.length) {
+      if (request.isCurrent() && res.results?.length) {
         const ranked = rankSources(res.results, playbackSettings)
         setSources(ranked)
       }
     } catch (err) {
       console.warn('Failed to search torrent providers:', err)
     } finally {
-      setIsSearchingSources(false)
+      if (request.isCurrent()) setIsSearchingSources(false)
     }
   }, [movie, playbackSettings])
 
@@ -111,6 +125,7 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
       const hash = extractInfoHash(movie.magnetURI) || movie.slug
       navigation.navigate('Player', {
         infoHash: hash,
+        contentKey: `movie:${movie.id || slug}`,
         title: movie.title,
         posterUrl: movie.poster_url || movie.poster,
         magnetURI: movie.magnetURI
@@ -124,6 +139,7 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
       if (hash) {
         navigation.navigate('Player', {
           infoHash: hash,
+          contentKey: `movie:${movie.id || slug}`,
           title: movie.title,
           posterUrl: movie.poster_url || movie.poster,
           magnetURI: best.magnetURI,
@@ -144,6 +160,7 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
     if (hash) {
       navigation.navigate('Player', {
         infoHash: hash,
+        contentKey: `movie:${movie.id || slug}`,
         title: movie.title,
         posterUrl: movie.poster_url || movie.poster,
         magnetURI: source.magnetURI,
@@ -181,7 +198,10 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
   if (!movie) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>Movie not found.</Text>
+        <Text style={styles.errorText}>{loadError || 'Movie not found.'}</Text>
+        <TouchableOpacity onPress={loadMovie} style={{ padding: 16 }} accessibilityRole="button">
+          <Text style={{ color: colors.primary }}>Retry</Text>
+        </TouchableOpacity>
       </View>
     )
   }

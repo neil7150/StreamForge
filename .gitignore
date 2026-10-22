@@ -60,3 +60,5 @@ apps/mobile/ios/
 apps/mobile/modules/streamforge-torrent-daemon/android/libs/*.aar
 services/torrent-daemon/*.aar
 services/torrent-daemon/*-sources.jar
+*.jks
+*.keystore

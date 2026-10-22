@@ -1,8 +1,23 @@
 param(
-  [switch]$AssembleOnly
+  [switch]$AssembleOnly,
+  [switch]$Release,
+  [switch]$AuthorizeApkBuild
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $AuthorizeApkBuild) {
+  throw 'APK generation requires explicit user permission. Pass -AuthorizeApkBuild only after that permission is given.'
+}
+if ($Release) {
+  foreach ($signingName in @('STREAMFORGE_KEYSTORE_PATH', 'STREAMFORGE_KEYSTORE_PASSWORD', 'STREAMFORGE_KEY_ALIAS', 'STREAMFORGE_KEY_PASSWORD')) {
+    if (-not [Environment]::GetEnvironmentVariable($signingName)) { throw "Required release signing variable is missing: $signingName" }
+  }
+  if (-not (Test-Path -LiteralPath $env:STREAMFORGE_KEYSTORE_PATH -PathType Leaf)) { throw 'The release keystore does not exist.' }
+  $backendUri = $null
+  if (-not [Uri]::TryCreate($env:EXPO_PUBLIC_API_BASE_URL, [UriKind]::Absolute, [ref]$backendUri) -or $backendUri.Scheme -ne 'https' -or $backendUri.UserInfo -or $backendUri.Query -or $backendUri.Fragment) {
+    throw 'Release requires an explicit HTTPS EXPO_PUBLIC_API_BASE_URL without embedded credentials or query tokens.'
+  }
+}
 $mobileDirectory = Resolve-Path (Join-Path $PSScriptRoot '..')
 $localJdkRoot = Join-Path $mobileDirectory '.expo\jdk17'
 $localJdk = Get-ChildItem -LiteralPath $localJdkRoot -Directory -ErrorAction SilentlyContinue |
@@ -18,22 +33,24 @@ if (-not $jdk) {
 }
 
 $env:JAVA_HOME = $jdk.FullName
-$env:NODE_ENV = 'development'
+$env:NODE_ENV = if ($Release) { 'production' } else { 'development' }
 if (-not $env:ANDROID_HOME) {
   $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 }
 
 $androidDirectory = Join-Path $mobileDirectory 'android'
-if (-not (Test-Path -LiteralPath $androidDirectory)) {
-  Push-Location $mobileDirectory
-  try {
-    & npx expo prebuild --platform android --no-install
-    if ($LASTEXITCODE -ne 0) {
-      throw "Expo prebuild failed with exit code $LASTEXITCODE"
-    }
-  } finally {
-    Pop-Location
+& (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Native torrent binding generation failed.' }
+
+# Apply tracked config plugins to existing generated projects as well.
+Push-Location $mobileDirectory
+try {
+  & npx expo prebuild --platform android --no-install
+  if ($LASTEXITCODE -ne 0) {
+    throw "Expo prebuild failed with exit code $LASTEXITCODE"
   }
+} finally {
+  Pop-Location
 }
 
 # The local Gradle archive avoids a wrapper download that Java cannot complete
@@ -54,7 +71,8 @@ if ($AssembleOnly) {
 
   Push-Location $androidDirectory
   try {
-    & .\gradlew.bat assembleDebug
+    $assemblyTask = if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
+    & .\gradlew.bat $assemblyTask '-PreactNativeArchitectures=arm64-v8a'
     exit $LASTEXITCODE
   } finally {
     Pop-Location
@@ -63,7 +81,8 @@ if ($AssembleOnly) {
 
 Push-Location $mobileDirectory
 try {
-  & npx expo run:android
+  $variant = if ($Release) { 'release' } else { 'debug' }
+  & npx expo run:android --variant $variant
   exit $LASTEXITCODE
 } finally {
   Pop-Location

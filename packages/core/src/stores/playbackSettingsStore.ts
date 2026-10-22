@@ -31,6 +31,7 @@ export interface PlaybackSettings {
 }
 
 interface PlaybackSettingsState extends PlaybackSettings {
+  hydrate: () => void
   updateSettings: (settings: Partial<PlaybackSettings>) => void
   resetSettings: () => void
 }
@@ -58,6 +59,27 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   torrentioEnabled: true
 }
 
+export function normalizePlaybackSettings(value: unknown): PlaybackSettings {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  const normalized = { ...DEFAULT_PLAYBACK_SETTINGS }
+  for (const key of Object.keys(DEFAULT_PLAYBACK_SETTINGS) as (keyof PlaybackSettings)[]) {
+    const baseline = DEFAULT_PLAYBACK_SETTINGS[key]
+    const candidate = source[key]
+    if (typeof baseline === 'boolean' && typeof candidate === 'boolean') (normalized as any)[key] = candidate
+    if (typeof baseline === 'string' && typeof candidate === 'string') (normalized as any)[key] = candidate.slice(0, 2048)
+    if (typeof baseline === 'number' && typeof candidate === 'number' && Number.isFinite(candidate)) (normalized as any)[key] = Math.max(0, candidate)
+  }
+  if (!['auto', '720p', '1080p', '2160p'].includes(normalized.preferredQuality)) normalized.preferredQuality = 'auto'
+  if (!['auto', 'always', 'off'].includes(normalized.subtitleMode)) normalized.subtitleMode = 'auto'
+  normalized.minimumSeeders = Math.min(10000, Math.round(normalized.minimumSeeders))
+  normalized.smartDownloadCount = Math.min(5, Math.max(1, Math.round(normalized.smartDownloadCount)))
+  normalized.torznabEndpoints = Array.isArray(source.torznabEndpoints) ? source.torznabEndpoints
+    .filter((item: any) => item && typeof item.url === 'string').slice(0, 8)
+    .map((item: any) => ({ url: item.url.slice(0, 2048), apiKey: typeof item.apiKey === 'string' ? item.apiKey.slice(0, 2048) : '' })) : []
+  normalized.stremioAddonUrls = Array.isArray(source.stremioAddonUrls) ? source.stremioAddonUrls.filter((item): item is string => typeof item === 'string').slice(0, 8).map(item => item.slice(0, 2048)) : []
+  return normalized
+}
+
 function loadSettings(): PlaybackSettings {
   try {
     const storage = getStorageAdapter()
@@ -74,12 +96,12 @@ function loadSettings(): PlaybackSettings {
     const torznabEndpoints = savedEndpoints.length > 0
       ? savedEndpoints
       : (saved.torznabUrl ? [{ url: saved.torznabUrl, apiKey: saved.torznabApiKey || '' }] : [])
-    return {
+    return normalizePlaybackSettings({
       ...DEFAULT_PLAYBACK_SETTINGS,
       ...saved,
       torznabEndpoints,
       torrentioEnabled: saved.torrentioEnabled ?? DEFAULT_PLAYBACK_SETTINGS.torrentioEnabled
-    }
+    })
   } catch {
     return DEFAULT_PLAYBACK_SETTINGS
   }
@@ -103,6 +125,7 @@ function persist(settings: PlaybackSettings): void {
 
 export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set) => ({
   ...loadSettings(),
+  hydrate: () => set(loadSettings()),
   updateSettings: (partial) => set((state) => {
     const next: PlaybackSettings = {
       preferredQuality: partial.preferredQuality ?? state.preferredQuality,

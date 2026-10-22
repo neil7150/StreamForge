@@ -5,7 +5,10 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  StatusBar
+  StatusBar,
+  AppState,
+  Modal,
+  FlatList
 } from 'react-native'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayer, VideoView } from 'expo-video'
@@ -22,7 +25,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import type { RootStackParamList } from '../navigation/types'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { useUserDataStore, usePlaybackSettingsStore } from '@streamforge/core/stores'
+import { useUserDataStore, usePlaybackSettingsStore, getAuthGeneration } from '@streamforge/core/stores'
 import {
   parseSubtitles,
   findActiveSubtitleCue,
@@ -31,7 +34,10 @@ import {
 import { formatDuration } from '@streamforge/core/utils'
 import { openSubtitlesClient } from '@streamforge/core/clients'
 import type { OnlineSubtitleResult } from '@streamforge/core/types'
-import { mobileTorrentAPI } from '../native/torrent-engine'
+import { mobileTorrentAPI, beginMobilePlayback, selectMobileFile } from '../native/torrent-engine'
+import type { PlaybackAttempt, SessionInfo } from '../playback/session-manager'
+import { flushMobileStorage } from '../storage/mobile-storage'
+import { acceptsPlayerStatus } from '../playback/player-event-policy'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Player'>
 
@@ -39,7 +45,7 @@ export const PlayerScreen = ({ navigation, route }: Props) => {
   if (!route.params?.infoHash) {
     return <InvalidPlaybackRequest navigation={navigation} />
   }
-  return <PlayerContent navigation={navigation} route={route} />
+  return <PlayerContent key={`${route.key}:${route.params.infoHash}:${route.params.episodeNumber ?? 0}:${route.params.fileIndex ?? -1}`} navigation={navigation} route={route} />
 }
 
 const InvalidPlaybackRequest = ({ navigation }: Pick<Props, 'navigation'>) => (
@@ -73,7 +79,13 @@ const PlayerContent = ({ navigation, route }: Props) => {
   } = params
 
   const isDirectStream = Boolean(initialStreamURL)
-  const [streamURL, setStreamURL] = useState<string>(initialStreamURL || '')
+  const [fileChoice, setFileChoice] = useState<SessionInfo | null>(null)
+  const attemptRef = useRef<PlaybackAttempt | null>(null)
+  const sourceOwnerRef = useRef<PlaybackAttempt | null>(null)
+  const sourceActiveRef = useRef(false)
+  const selectedFileRef = useRef(fileIndex)
+  const resumePendingRef = useRef(initialTime || 0)
+  const accountGenerationRef = useRef(getAuthGeneration())
   const [isPlaying, setIsPlaying] = useState(true)
   const [currentTime, setCurrentTime] = useState(initialTime || 0)
   const [duration, setDuration] = useState(initialDuration || 0)
@@ -101,146 +113,194 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const preferredSubtitleLanguage = playbackSettings.preferredSubtitleLanguage
 
   // 1. Initialize native video player via expo-video
-  const player = useVideoPlayer(streamURL || null, (p) => {
+  const player = useVideoPlayer(null, (p) => {
     p.loop = false
     // expo-video does not emit timeUpdate events when this is zero.
-    p.timeUpdateEventInterval = 0.25
-    if (initialTime && initialTime > 0) {
-      p.currentTime = initialTime
-    }
-    p.play()
+    p.timeUpdateEventInterval = 0.5
+    p.staysActiveInBackground = false
+    p.audioMixingMode = 'doNotMix'
   })
+
+  const syncReadyState = useCallback(() => {
+    if (player.status !== 'readyToPlay') return
+    setIsBuffering(false)
+    if (player.duration > 0) {
+      durationRef.current = player.duration
+      setDuration(player.duration)
+      if (resumePendingRef.current > 0) {
+        player.currentTime = Math.min(resumePendingRef.current, Math.max(0, player.duration - 1))
+        currentTimeRef.current = player.currentTime
+        resumePendingRef.current = 0
+      }
+    }
+  }, [player])
 
   // 2. Lock to landscape while inside player, return to portrait on exit
   useEffect(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {})
-
+    let active = true
+    const previous = ScreenOrientation.getOrientationLockAsync()
+    void previous.then(() => {
+      if (active) return ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+    }).catch(() => {})
     return () => {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT).catch(() => {})
+      active = false
+      void previous.then(lock => ScreenOrientation.lockAsync(lock)).catch(() => {})
     }
   }, [])
 
-  // 3. Resolve the stream URL and subscribe to torrent progress.
   useEffect(() => {
-    let isMounted = true
-    setPlaybackError(null)
-    setIsBuffering(!isDirectStream)
-
-    if (isDirectStream) {
+    if (!isBuffering) return
+    const timeout = setTimeout(() => {
+      player.pause()
+      setPlaybackError('The stream did not provide video data. Retry or choose another source.')
       setIsBuffering(false)
-    } else if (magnetURI) {
-      const preferredEp = {
-        seasonNumber: isSeries ? (seasonNumber || 1) : 0,
-        episodeNumber: isSeries ? (episodeNumber || 1) : 0,
-        ...(fileIndex !== undefined ? { fileIndex } : {})
-      }
+      void attemptRef.current?.close().catch(() => {})
+    }, 60_000)
+    return () => clearTimeout(timeout)
+  }, [isBuffering, player, retryNonce])
 
-      mobileTorrentAPI.addTorrent(magnetURI, preferredEp).then((info) => {
-        if (isMounted && info.streamURL) {
-          setPlaybackError(null)
-          setStreamURL(info.streamURL)
-          setIsBuffering(false)
-        }
-      }).catch((err) => {
-        console.warn('Failed to add torrent stream:', err)
-        if (isMounted) {
-          setPlaybackError(err instanceof Error ? err.message : 'Unable to start torrent playback.')
-          setIsBuffering(false)
-        }
-      })
-    } else if (infoHash) {
-      mobileTorrentAPI.getStreamURL(infoHash).then((url) => {
-        if (isMounted) {
-          setStreamURL(url)
-          setIsBuffering(false)
-        }
-      }).catch(() => {
-        if (isMounted) {
-          setPlaybackError('The stream session is no longer available. Please start playback again.')
-          setIsBuffering(false)
-        }
-      })
+  // A unique attempt owns setup and cleanup, including retries of the same URL.
+  useEffect(() => {
+    let active = true
+    let attempt: PlaybackAttempt | null = null
+    sourceActiveRef.current = false
+    sourceOwnerRef.current = null
+    setPlaybackError(null)
+    setFileChoice(null)
+    setIsBuffering(true)
+    resumePendingRef.current = currentTimeRef.current
+
+    const load = async (url: string) => {
+      sourceOwnerRef.current = attempt
+      await player.replaceAsync(url)
+      if (!active) return
+      sourceActiveRef.current = true
+      if (player.status === 'error') throw new Error('The video player could not open this stream')
+      syncReadyState()
+      if (AppState.currentState === 'active') player.play()
     }
-
-    // Load subtitle if API key configured
-    if (openSubtitlesApiKey) {
-      openSubtitlesClient.searchOnlineSubtitles({
-        apiKey: openSubtitlesApiKey,
-        query: title,
-        language: preferredSubtitleLanguage || 'eng'
-      }).then(async (results: OnlineSubtitleResult[]) => {
-        if (results?.length && isMounted) {
-          const srtText = await openSubtitlesClient.downloadOnlineSubtitle(
-            openSubtitlesApiKey,
-            results[0].fileId
-          )
-          const cues = parseSubtitles(srtText)
-          if (isMounted) setSubtitles(cues)
-        }
-      }).catch(() => {})
-    }
-
-    // Subscribe to torrent progress
-    const unsubProgress = mobileTorrentAPI.onTorrentProgress((progress) => {
-      if (isMounted) {
-        setStreamInfo({
-          peers: progress.numPeers || 0,
-          speed: `${((progress.downloadSpeed || 0) / (1024 * 1024)).toFixed(1)} MB/s`,
-          buffered: progress.progress || 0
+    const resolve = async () => {
+      if (isDirectStream && initialStreamURL) {
+        if (!initialStreamURL.toLowerCase().startsWith('https://')) throw new Error('Direct playback requires an HTTPS video URL')
+        await load(initialStreamURL)
+      } else if (magnetURI) {
+        attempt = beginMobilePlayback(magnetURI, {
+          seasonNumber: seasonNumber ?? 0, episodeNumber: episodeNumber ?? 0,
+          ...(selectedFileRef.current !== undefined ? { fileIndex: selectedFileRef.current } : {})
         })
+        attemptRef.current = attempt
+        const info = await attempt.result
+        if (!active) return
+        if (info.requiresFileSelection) {
+          setIsBuffering(false)
+          setFileChoice(info)
+        } else {
+          selectedFileRef.current = info.selectedFileIndex
+          await load(info.streamURL)
+        }
+      } else {
+        throw new Error('This history entry has no saved source. Choose a source again from its details page.')
+      }
+    }
+    void resolve().catch(error => {
+      if (active) {
+        setPlaybackError(error instanceof Error ? error.message : 'Unable to start playback'); setIsBuffering(false)
+        void attempt?.close().catch(() => {})
       }
     })
-
+    const progress = mobileTorrentAPI.onTorrentProgress(data => {
+      if (active && data.infoHash === infoHash) setStreamInfo({
+        peers: data.numPeers, speed: `${(data.downloadSpeed / (1024 * 1024)).toFixed(1)} MB/s`, buffered: data.progress
+      })
+    })
+    const errors = mobileTorrentAPI.onTorrentError(data => {
+      if (active && data.infoHash === infoHash) {
+        player.pause(); setPlaybackError(data.error); setIsBuffering(false)
+      }
+    })
+    const appState = AppState.addEventListener('change', state => {
+      if (state === 'active') return
+      player.pause()
+      if (attempt) {
+        void attempt.close().catch(() => {})
+        setPlaybackError('Playback stopped while the app was in the background. Tap Retry to resume.')
+        setIsBuffering(false)
+      }
+    })
     return () => {
-      isMounted = false
-      unsubProgress()
+      active = false
+      sourceActiveRef.current = false
+      sourceOwnerRef.current = null
+      progress(); errors(); appState.remove()
+      if (attemptRef.current === attempt) attemptRef.current = null
+      void attempt?.close().catch(() => {})
     }
-  }, [infoHash, magnetURI, fileIndex, title, openSubtitlesApiKey, preferredSubtitleLanguage, isDirectStream, isSeries, seasonNumber, episodeNumber, retryNonce])
+  }, [infoHash, magnetURI, isDirectStream, initialStreamURL, seasonNumber, episodeNumber, retryNonce, player, syncReadyState])
 
+  // Subtitle changes do not restart the torrent session.
   useEffect(() => {
-    return () => {
-      if (magnetURI) {
-        void mobileTorrentAPI.cleanupStream(infoHash).catch(() => {})
+    let active = true
+    setSubtitles([])
+    if (playbackSettings.subtitleMode !== 'off' && openSubtitlesApiKey) {
+      void openSubtitlesClient.searchOnlineSubtitles({ apiKey: openSubtitlesApiKey, query: title, language: preferredSubtitleLanguage || 'eng' })
+        .then(async (results: OnlineSubtitleResult[]) => {
+          if (!active || !results.length) return
+          const text = await openSubtitlesClient.downloadOnlineSubtitle(openSubtitlesApiKey, results[0].fileId)
+          if (active) setSubtitles(parseSubtitles(text))
+        }).catch(() => {})
+    }
+    return () => { active = false }
+  }, [title, openSubtitlesApiKey, preferredSubtitleLanguage, playbackSettings.subtitleMode])
+
+  const chooseVideoFile = async (index: number) => {
+    const attempt = attemptRef.current
+    if (!attempt || !fileChoice) return
+    setIsBuffering(true)
+    setFileChoice(null)
+    try {
+      const info = await selectMobileFile(attempt.id, index)
+      if (attemptRef.current !== attempt) return
+      selectedFileRef.current = index
+      sourceOwnerRef.current = attempt
+      sourceActiveRef.current = false
+      await player.replaceAsync(info.streamURL)
+      if (attemptRef.current !== attempt) return
+      sourceActiveRef.current = true
+      if (player.status === 'error') throw new Error('The video player could not open this file')
+      syncReadyState()
+      if (AppState.currentState === 'active') player.play()
+    } catch (error) {
+      if (attemptRef.current === attempt) {
+        setPlaybackError(error instanceof Error ? error.message : 'Unable to select this file')
+        setIsBuffering(false)
       }
     }
-  }, [infoHash, magnetURI])
-
-  // 4. Update player source when streamURL changes AFTER initial render
-  const initialStreamURLRef = useRef(initialStreamURL || '')
-  useEffect(() => {
-    // Only replace if the URL has actually changed from what the player was
-    // initialized with — avoids a redundant reload on first render.
-    if (streamURL && player && streamURL !== initialStreamURLRef.current) {
-      initialStreamURLRef.current = streamURL
-      void player.replaceAsync(streamURL)
-        .then(() => player.play())
-        .catch((err) => console.warn('Failed to replace player source:', err))
-    }
-  }, [streamURL, player])
+  }
 
   // 5. Subscribe to real native player events (replaces simulated interval clock)
   useEffect(() => {
     if (!player) return
 
     const subPlaying = player.addListener('playingChange', (event) => {
-      setIsPlaying(event.isPlaying)
+      setIsPlaying(player.playing)
     })
 
     const subStatus = player.addListener('statusChange', (event) => {
+      if (!acceptsPlayerStatus(sourceActiveRef.current, event.status, player.status)) return
       if (event.status === 'loading') {
         setIsBuffering(true)
       } else if (event.status === 'readyToPlay') {
-        setIsBuffering(false)
-        if (player.duration > 0) {
-          setDuration(player.duration)
-        }
+        syncReadyState()
       } else if (event.status === 'error') {
         setPlaybackError('The video player could not open this stream.')
         setIsBuffering(false)
+        void sourceOwnerRef.current?.close().catch(() => {})
       }
     })
 
     const subTime = player.addListener('timeUpdate', (event) => {
+      if (!sourceActiveRef.current || player.status !== 'readyToPlay' || !Number.isFinite(event.currentTime)) return
+      if (resumePendingRef.current > 0 && player.duration > 0) { syncReadyState(); return }
       currentTimeRef.current = event.currentTime
       setCurrentTime(event.currentTime)
       if (player.duration > 0) {
@@ -254,7 +314,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
       subStatus.remove()
       subTime.remove()
     }
-  }, [player])
+  }, [player, syncReadyState])
 
   // 6. Subtitle cue synchronizer
   useEffect(() => {
@@ -268,13 +328,13 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
   // 7. Save watch progress to history
   const saveProgress = useCallback(() => {
-    const curTime = player ? player.currentTime : currentTimeRef.current
-    const dur = player && player.duration > 0 ? player.duration : durationRef.current
-    if (curTime <= 0) return
+    const curTime = currentTimeRef.current
+    const dur = durationRef.current
+    if (accountGenerationRef.current !== getAuthGeneration() || !Number.isFinite(curTime) || curTime <= 0) return
     const progressRatio = dur > 0 ? curTime / dur : 0
     addToHistory({
       movieId: infoHash,
-      contentKey: infoHash,
+      contentKey: params.contentKey || (isSeries ? `episode:${seriesTitle || infoHash}:${seasonNumber || 0}:${episodeNumber || 0}` : `magnet:${infoHash}`),
       contentType: isSeries ? 'episode' : 'movie',
       seriesTitle,
       seasonNumber,
@@ -285,15 +345,22 @@ const PlayerContent = ({ navigation, route }: Props) => {
       progress: progressRatio,
       currentTime: curTime,
       duration: dur,
-      magnetURI: magnetURI || `magnet:?xt=urn:btih:${infoHash}`
+      magnetURI: magnetURI || '',
+      fileIndex: selectedFileRef.current,
+      streamURL: isDirectStream ? initialStreamURL : undefined
     })
-  }, [player, infoHash, isSeries, seriesTitle, seasonNumber, episodeNumber, title, posterUrl, magnetURI, addToHistory])
+  }, [infoHash, isSeries, seriesTitle, seasonNumber, episodeNumber, title, posterUrl, magnetURI, addToHistory, params.contentKey, isDirectStream, initialStreamURL])
 
   useEffect(() => {
     progressTimer.current = setInterval(saveProgress, 10000)
+    const background = AppState.addEventListener('change', state => {
+      if (state !== 'active') { saveProgress(); void flushMobileStorage().catch(() => {}) }
+    })
     return () => {
+      background.remove()
       if (progressTimer.current) clearInterval(progressTimer.current)
       saveProgress()
+      void flushMobileStorage().catch(() => {})
     }
   }, [saveProgress])
 
@@ -331,6 +398,8 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
   const handlePlayPause = () => {
     resetControlsTimer()
+    if (playbackError) { retryPlayback(); return }
+    if (fileChoice) return
     if (!player) return
     if (player.playing) {
       player.pause()
@@ -345,6 +414,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
       const ratio = Math.max(0, Math.min(1, locationX / trackWidth))
       const targetTime = Math.round(ratio * duration)
       player.currentTime = targetTime
+      currentTimeRef.current = targetTime
       setCurrentTime(targetTime)
       resetControlsTimer()
     }
@@ -358,24 +428,26 @@ const PlayerContent = ({ navigation, route }: Props) => {
     navigation.goBack()
   }
 
-  const retryPlayback = () => {
-    setPlaybackError(null)
-    setIsBuffering(true)
-    if (isDirectStream && initialStreamURL) {
-      void player.replaceAsync(initialStreamURL)
-        .then(() => player.play())
-        .catch((err) => {
-          setPlaybackError(err instanceof Error ? err.message : 'Unable to reload this stream.')
-          setIsBuffering(false)
-        })
-    } else {
-      setRetryNonce((value) => value + 1)
-    }
-  }
+  const retryPlayback = () => { setRetryNonce(value => value + 1) }
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
+
+      <Modal visible={fileChoice !== null} transparent onRequestClose={handleBack}>
+        <View style={[styles.errorContainer, { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)', padding: 24 }]}>
+          <Text style={styles.errorTitle}>Choose a video file</Text>
+          <FlatList
+            data={fileChoice?.files.filter(file => file.type === 'video') || []}
+            keyExtractor={file => String(file.index)}
+            renderItem={({ item }) => <TouchableOpacity onPress={() => { void chooseVideoFile(item.index) }} style={{ paddingVertical: 16 }} accessibilityRole="button">
+              <Text style={{ color: '#ffffff' }}>{item.path}</Text>
+              <Text style={{ color: colors.textSecondary }}>{(item.size / 1048576).toFixed(0)} MiB</Text>
+            </TouchableOpacity>}
+          />
+          <TouchableOpacity onPress={handleBack} style={{ padding: 16 }}><Text style={{ color: '#ffffff' }}>Cancel</Text></TouchableOpacity>
+        </View>
+      </Modal>
 
       {/* Touch surface */}
       <TouchableOpacity

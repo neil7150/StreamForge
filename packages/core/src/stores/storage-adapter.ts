@@ -2,6 +2,8 @@ export interface StorageAdapter {
   getItem: (key: string) => string | null
   setItem: (key: string, value: string) => void
   removeItem: (key: string) => void
+  setItems?: (entries: ReadonlyArray<readonly [string, string]>) => void
+  removeItems?: (keys: string[]) => void
 }
 
 const inMemoryStorage = new Map<string, string>()

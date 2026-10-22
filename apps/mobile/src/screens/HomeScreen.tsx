@@ -21,7 +21,6 @@ import { colors } from '../theme/colors'
 import { api } from '@streamforge/core/clients'
 import { useUserDataStore } from '@streamforge/core/stores'
 import { formatResumeTime } from '@streamforge/core/policies'
-import { MOCK_MOVIES } from '@streamforge/core/utils'
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
@@ -34,6 +33,7 @@ export const HomeScreen = ({ navigation }: Props) => {
   const [recent, setRecent] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const history = useUserDataStore((s) => s.history)
   const watchlist = useUserDataStore((s) => s.watchlist)
@@ -41,20 +41,23 @@ export const HomeScreen = ({ navigation }: Props) => {
   const removeFromWatchlist = useUserDataStore((s) => s.removeFromWatchlist)
 
   const loadContent = useCallback(async () => {
+    setLoadError(null)
     try {
       const [trendRes, recentRes] = await Promise.allSettled([
         api.getTrendingMovies(15),
         api.getRecentMovies(15)
       ])
 
-      const trendData = trendRes.status === 'fulfilled' && trendRes.value?.data ? trendRes.value.data : MOCK_MOVIES.slice(0, 8)
-      const recentData = recentRes.status === 'fulfilled' && recentRes.value?.data ? recentRes.value.data : MOCK_MOVIES.slice(8, 16)
+      const trendData = trendRes.status === 'fulfilled' && trendRes.value?.data ? trendRes.value.data : []
+      const recentData = recentRes.status === 'fulfilled' && recentRes.value?.data ? recentRes.value.data : []
+      if (trendRes.status === 'rejected' || recentRes.status === 'rejected') {
+        setLoadError('Some titles could not be loaded. Check your connection and try again.')
+      }
 
       setTrending(trendData)
       setRecent(recentData)
     } catch {
-      setTrending(MOCK_MOVIES.slice(0, 8))
-      setRecent(MOCK_MOVIES.slice(8, 16))
+      setLoadError('Titles could not be loaded. Please try again.')
     } finally {
       setIsLoading(false)
       setRefreshing(false)
@@ -70,7 +73,7 @@ export const HomeScreen = ({ navigation }: Props) => {
     loadContent()
   }
 
-  const featured = trending[0] || MOCK_MOVIES[0]
+  const featured = trending[0]
   const isFeaturedInWatchlist = watchlist.some((w) => w.movieId === (featured?.id || featured?.slug))
 
   if (isLoading) {
@@ -88,6 +91,14 @@ export const HomeScreen = ({ navigation }: Props) => {
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
       }
     >
+      {loadError || (trending.length === 0 && recent.length === 0) ? (
+        <View style={[styles.section, { padding: 16, paddingTop: insets.top + 16 }]}>
+          <Text style={{ color: colors.textSecondary }}>{loadError || 'No titles available yet.'}</Text>
+          <TouchableOpacity onPress={onRefresh} accessibilityRole="button" style={{ paddingVertical: 16 }}>
+            <Text style={{ color: colors.primary }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       {/* Hero Banner */}
       {featured ? (
         <View style={[styles.heroContainer, { height: 380 + insets.top }]}>
@@ -163,6 +174,10 @@ export const HomeScreen = ({ navigation }: Props) => {
                 onPress={() =>
                   navigation.navigate('Player', {
                     infoHash: item.movieId,
+                    contentKey: item.contentKey,
+                    magnetURI: item.magnetURI || undefined,
+                    fileIndex: item.fileIndex,
+                    streamURL: item.streamURL,
                     title: item.title,
                     posterUrl: item.poster,
                     currentTime: item.currentTime,
@@ -181,6 +196,10 @@ export const HomeScreen = ({ navigation }: Props) => {
                   onPress={() =>
                     navigation.navigate('Player', {
                       infoHash: item.movieId,
+                      contentKey: item.contentKey,
+                      magnetURI: item.magnetURI || undefined,
+                      fileIndex: item.fileIndex,
+                      streamURL: item.streamURL,
                       title: item.title,
                       posterUrl: item.poster,
                       currentTime: item.currentTime,
@@ -247,26 +266,6 @@ export const HomeScreen = ({ navigation }: Props) => {
         />
       </View>
 
-      {/* Public Domain Classics */}
-      <View style={[styles.section, { marginBottom: 32 }]}>
-        <Text style={styles.sectionTitle}>Public Domain Classics</Text>
-        <FlatList
-          data={MOCK_MOVIES}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={(item: any) => item.id}
-          contentContainerStyle={styles.horizontalList}
-          renderItem={({ item }: { item: any }) => (
-            <MediaCard
-              title={item.title}
-              posterUrl={item.poster}
-              year={item.year}
-              rating={item.rating}
-              onPress={() => navigation.navigate('MovieDetail', { slug: item.slug, id: item.id })}
-            />
-          )}
-        />
-      </View>
     </ScrollView>
   )
 }

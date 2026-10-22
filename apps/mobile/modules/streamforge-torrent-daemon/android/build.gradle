@@ -16,4 +16,5 @@ android {
 
 dependencies {
   implementation project(":${project.name}\$streamforge-go")
+  testImplementation 'junit:junit:4.13.2'
 }

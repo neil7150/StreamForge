@@ -56,7 +56,7 @@ export function LoginScreen() {
         if (errMsg.includes('network') || errMsg.includes('fetch') || errMsg.includes('failed') || errMsg.includes('timeout') || errMsg.includes('not configured')) {
           Alert.alert(
             'Backend Unavailable',
-            'Cannot reach the StreamForge server. The auth backend is not running or is unreachable from this device.\n\nTo use auth, configure EXPO_PUBLIC_API_BASE_URL in your environment to point to a reachable server address (e.g., your PC\'s local IP).'
+            'Cannot reach the StreamForge server. Check your connection and try again later.'
           )
         }
       }

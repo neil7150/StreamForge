@@ -2,150 +2,98 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/streamforge/services/torrent-daemon/engine"
 )
 
-// StreamServer provides HTTP localhost endpoints for mobile video players.
+type StreamSource interface {
+	SessionToken(string) string
+	OpenReader(string, context.Context) (io.ReadSeekCloser, int64, string, error)
+}
+
 type StreamServer struct {
-	engine *engine.TorrentEngine
+	engine StreamSource
 	server *http.Server
 	port   int
 }
 
-// NewStreamServer creates a new local HTTP streaming server on 127.0.0.1:port.
-func NewStreamServer(eng *engine.TorrentEngine, port int) *StreamServer {
+func NewStreamServer(source StreamSource, port int) *StreamServer {
 	if port <= 0 {
 		port = 8888
 	}
-
-	s := &StreamServer{
-		engine: eng,
-		port:   port,
-	}
-
+	s := &StreamServer{engine: source, port: port}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", s.handleStream)
-	mux.HandleFunc("/stats/", s.handleStats)
-	mux.HandleFunc("/add", s.handleAdd)
-	mux.HandleFunc("/cleanup/", s.handleCleanup)
-	mux.HandleFunc("/health", s.handleHealth)
-
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("127.0.0.1:%d", port),
-		Handler:      mux,
-		ReadTimeout:  30 * time.Minute,
-		WriteTimeout: 30 * time.Minute,
-	}
-
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "protocol": 2})
+	})
+	// Administration and statistics are native-only; no unauthenticated HTTP controls.
+	s.server = &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	return s
 }
 
-// Start runs the HTTP server in the background.
-func (s *StreamServer) Start() error {
-	return s.server.ListenAndServe()
+// Listen binds synchronously so startup cannot succeed with an occupied port.
+func (s *StreamServer) Listen() error {
+	listener, err := net.Listen("tcp4", s.server.Addr)
+	if err != nil {
+		return err
+	}
+	go func() { _ = s.server.Serve(listener) }()
+	return nil
 }
-
-// Stop terminates the server.
+func (s *StreamServer) Start() error { return s.server.ListenAndServe() }
 func (s *StreamServer) Stop(ctx context.Context) error {
-	return s.server.Shutdown(ctx)
+	if err := s.server.Shutdown(ctx); err != nil {
+		_ = s.server.Close()
+		return err
+	}
+	return nil
 }
 
-func (s *StreamServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "1.0.0"})
-}
-
-func (s *StreamServer) handleAdd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+func (s *StreamServer) handleStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	var req struct {
-		MagnetURI string `json:"magnetURI"`
-		FileIndex int    `json:"fileIndex"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	id := strings.TrimPrefix(r.URL.Path, "/stream/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	file, infoHash, err := s.engine.AddStream(ctx, req.MagnetURI, req.FileIndex)
+	token := s.engine.SessionToken(id)
+	supplied := r.URL.Query().Get("token")
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(supplied)) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	reader, _, name, err := s.engine.OpenReader(id, r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Stream unavailable", http.StatusNotFound)
 		return
 	}
-
-	streamURL := fmt.Sprintf("http://127.0.0.1:%d/stream/%s", s.port, infoHash)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"infoHash":  infoHash,
-		"fileName":  file.DisplayPath(),
-		"fileSize":  file.Length(),
-		"streamURL": streamURL,
-	})
-}
-
-// handleStream serves standard HTTP range requests for the video file.
-func (s *StreamServer) handleStream(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/stream/")
-	parts := strings.Split(path, "/")
-	if len(parts) == 0 || parts[0] == "" {
-		http.Error(w, "Missing infoHash", http.StatusBadRequest)
-		return
-	}
-	infoHash := parts[0]
-
-	reader, _, filename, err := s.engine.GetFileStream(infoHash)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
-	}
-
-	// Content-Type detection
-	ext := filepath.Ext(filename)
-	contentType := mime.TypeByExtension(ext)
+	defer reader.Close()
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
 	if contentType == "" {
-		contentType = "video/mp4"
+		contentType = "application/octet-stream"
 	}
-
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	http.ServeContent(w, r, filename, time.Now(), reader)
-}
-
-func (s *StreamServer) handleStats(w http.ResponseWriter, r *http.Request) {
-	infoHash := strings.TrimPrefix(r.URL.Path, "/stats/")
-	stats, err := s.engine.GetStats(infoHash)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
-}
-
-func (s *StreamServer) handleCleanup(w http.ResponseWriter, r *http.Request) {
-	infoHash := strings.TrimPrefix(r.URL.Path, "/cleanup/")
-	s.engine.RemoveStream(infoHash)
-	w.WriteHeader(http.StatusNoContent)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, name, time.Time{}, reader)
 }

@@ -13,6 +13,7 @@
       "backgroundColor": "#090d16"
     },
     "android": {
+      "versionCode": 1,
       "package": "com.streamforge.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -46,9 +47,11 @@
       ]
     },
     "plugins": [
+      "expo-secure-store",
       "expo-screen-orientation",
       "expo-video",
-      "./plugins/with-localhost-cleartext"
+      "./plugins/with-localhost-cleartext",
+      "./plugins/with-android-release"
     ]
   }
 }

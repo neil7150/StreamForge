@@ -95,7 +95,9 @@ export const LibraryScreen = ({ navigation }: Props) => {
               year={item.year}
               rating={item.rating}
               width={ITEM_WIDTH}
-              onPress={() => navigation.navigate('MovieDetail', { slug: item.slug, id: item.movieId })}
+              onPress={() => item.contentType === 'series'
+                ? navigation.navigate('SeriesDetail', { slug: item.slug, id: item.catalogId })
+                : navigation.navigate('MovieDetail', { slug: item.slug, id: item.movieId })}
             />
           )}
         />
@@ -132,6 +134,10 @@ export const LibraryScreen = ({ navigation }: Props) => {
               onPress={() =>
                 navigation.navigate('Player', {
                   infoHash: item.movieId,
+                  contentKey: item.contentKey,
+                  magnetURI: item.magnetURI || undefined,
+                  fileIndex: item.fileIndex,
+                  streamURL: item.streamURL,
                   title: item.title,
                   posterUrl: item.poster,
                   currentTime: item.currentTime,

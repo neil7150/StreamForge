@@ -1,17 +1,23 @@
-import React, { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { View, Text, TouchableOpacity, ActivityIndicator, AppState } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native'
 import * as Linking from 'expo-linking'
-import { setTorrentAPI, useAuthStore, extractInfoHash } from '@streamforge/core'
-import { initializeMobileTorrentEngine, mobileTorrentAPI } from './native/torrent-engine'
+import { setTorrentAPI, useAuthStore, extractInfoHash, api } from '@streamforge/core'
+import { mobileTorrentAPI } from './native/torrent-engine'
+import { resolveMobileBackend } from './config/backend'
 import { RootNavigator } from './navigation/RootNavigator'
 import type { RootStackParamList } from './navigation/types'
 import { colors } from './theme/colors'
+import { initializeMobileStorage, flushMobileStorage, onStorageError } from './storage/mobile-storage'
 
 export const navigationRef = createNavigationContainerRef<RootStackParamList>()
 
 const prefix = Linking.createURL('/')
+
+// Expo statically replaces this exact property access in the JS bundle.
+api.setBaseURL(resolveMobileBackend(process.env.EXPO_PUBLIC_API_BASE_URL))
 
 const linkingConfig = {
   prefixes: [prefix, 'streamforge://'],
@@ -36,6 +42,23 @@ const linkingConfig = {
 
 export default function App() {
   const pendingMagnetRef = useRef<string | null>(null)
+  const [storageReady, setStorageReady] = useState(false)
+  const [storageError, setStorageError] = useState<string | null>(null)
+  const loadStorage = useCallback(() => {
+    setStorageError(null)
+    void initializeMobileStorage().then(() => setStorageReady(true)).catch(() => {
+      setStorageError('Saved data could not be loaded. Retry to continue.')
+    })
+  }, [])
+
+  useEffect(() => {
+    onStorageError(setStorageError)
+    loadStorage()
+    const listener = AppState.addEventListener('change', state => {
+      if (state !== 'active') void flushMobileStorage().catch(() => {})
+    })
+    return () => { listener.remove(); onStorageError(() => {}) }
+  }, [loadStorage])
 
   const openMagnet = useCallback((url: string) => {
     const infoHash = extractInfoHash(url)
@@ -55,12 +78,6 @@ export default function App() {
   useEffect(() => {
     // 1. Initialize mobile torrent streaming engine
     setTorrentAPI(mobileTorrentAPI)
-    void initializeMobileTorrentEngine().catch((error) => {
-      console.warn('Torrent daemon warm-up failed:', error)
-    })
-
-    // 2. Load cached user session
-    useAuthStore.getState().loadSession()
 
     // 3. Handle incoming magnet or stream links
     const handleUrl = (url: string | null) => {
@@ -81,6 +98,21 @@ export default function App() {
   return (
     <SafeAreaProvider style={{ flex: 1, backgroundColor: colors.background }}>
       <StatusBar style="light" />
+      {!storageReady ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          {storageError ? <>
+            <Text style={{ color: colors.foreground }}>{storageError}</Text>
+            <TouchableOpacity onPress={loadStorage} style={{ padding: 16 }} accessibilityRole="button">
+              <Text style={{ color: colors.primary }}>Retry</Text>
+            </TouchableOpacity>
+          </> : <ActivityIndicator color={colors.primary} />}
+        </View>
+      ) : <>
+      {storageError ? <TouchableOpacity
+        accessibilityRole="button"
+        onPress={() => { void flushMobileStorage().catch(() => {}) }}
+        style={{ padding: 16, backgroundColor: colors.card }}
+      ><Text style={{ color: colors.destructive }}>{storageError} Tap to retry.</Text></TouchableOpacity> : null}
       <NavigationContainer
         ref={navigationRef}
         linking={linkingConfig}
@@ -90,6 +122,7 @@ export default function App() {
       >
         <RootNavigator />
       </NavigationContainer>
+      </>}
     </SafeAreaProvider>
   )
 }

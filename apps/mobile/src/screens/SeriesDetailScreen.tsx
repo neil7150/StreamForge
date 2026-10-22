@@ -1,8 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View,
   Text,
-  ScrollView,
   FlatList,
   Image,
   ImageBackground,
@@ -22,6 +21,7 @@ import { rankSources } from '@streamforge/core/policies'
 import { usePlaybackSettingsStore, useUserDataStore } from '@streamforge/core/stores'
 import { extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult, EpisodeSummary, SeasonSummary } from '@streamforge/core/types'
+import { RequestGate } from '../data/request-gate'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SeriesDetail'>
 
@@ -40,21 +40,41 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
   const [selectedEpisode, setSelectedEpisode] = useState<EpisodeSummary | null>(null)
   const [episodeSources, setEpisodeSources] = useState<TorrentSearchResult[]>([])
   const [isSearchingEpisode, setIsSearchingEpisode] = useState(false)
+  const sourceRequests = useRef(new RequestGate())
+  const detailsRequests = useRef(new RequestGate())
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const playbackSettings = usePlaybackSettingsStore()
   const watchlist = useUserDataStore((s) => s.watchlist)
   const addToWatchlist = useUserDataStore((s) => s.addToWatchlist)
   const removeFromWatchlist = useUserDataStore((s) => s.removeFromWatchlist)
 
-  const isSaved = show ? watchlist.some((w) => w.movieId === (show.id || show.slug)) : false
+  const watchlistKey = show ? `series:${show.id || slug}` : ''
+  const isSaved = watchlist.some(w => w.movieId === watchlistKey)
+  const toggleWatchlist = () => {
+    if (!show) return
+    if (isSaved) removeFromWatchlist(watchlistKey)
+    else addToWatchlist({
+      movieId: watchlistKey, contentType: 'series', catalogId: id ?? show.id,
+      slug, title: show.title, poster: show.poster_url || show.posterUrl || '',
+      year: 0, rating: Number(show.rating?.average || show.avg_rating || show.rating) || 0, magnetURI: ''
+    })
+  }
 
   const loadShow = useCallback(async () => {
+    const request = detailsRequests.current.begin()
+    sourceRequests.current.cancel()
+    setIsLoading(true)
+    setLoadError(null)
+    setShow(null)
+    setSeasons([])
     try {
       if (typeof id === 'number') {
         const [showDetails, seasonList] = await Promise.all([
           tvmazeClient.getSeries(id),
           tvmazeClient.getSeasons(id)
         ])
+        if (!request.isCurrent()) return
         setShow(showDetails)
         setSeasons(seasonList)
         if (seasonList.length > 0) {
@@ -62,6 +82,7 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         }
       } else {
         const res = await api.getShowBySlug(slug)
+        if (!request.isCurrent()) return
         if (res?.data) {
           setShow(res.data)
           if (res.data.seasons?.length) {
@@ -71,18 +92,22 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         }
       }
     } catch (err) {
-      console.warn('Failed to load series:', err)
+      if (request.isCurrent()) setLoadError('Could not load this series. Check your connection and retry.')
     } finally {
-      setIsLoading(false)
+      if (request.isCurrent()) setIsLoading(false)
     }
   }, [id, slug])
 
   useEffect(() => {
     loadShow()
+    return () => { detailsRequests.current.cancel(); sourceRequests.current.cancel() }
   }, [loadShow])
 
   // Load episodes when selectedSeason changes
   useEffect(() => {
+    let active = true
+    setEpisodes([])
+    setIsLoadingEpisodes(false)
     if (!show) return
     const seasonObj = seasons.find((s: any) => (s.number ?? s.season_number) === selectedSeason)
     if (!seasonObj) return
@@ -90,9 +115,9 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
     setIsLoadingEpisodes(true)
     if (typeof id === 'number') {
       tvmazeClient.getSeasonEpisodes(seasonObj.id)
-        .then((eps: EpisodeSummary[]) => setEpisodes(eps))
-        .catch(() => setEpisodes([]))
-        .finally(() => setIsLoadingEpisodes(false))
+        .then((eps: EpisodeSummary[]) => { if (active) setEpisodes(eps) })
+        .catch(() => { if (active) setEpisodes([]) })
+        .finally(() => { if (active) setIsLoadingEpisodes(false) })
     } else {
       // From backend content service
       if ((seasonObj as any).episodes) {
@@ -102,9 +127,11 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         setIsLoadingEpisodes(false)
       }
     }
+    return () => { active = false }
   }, [show, selectedSeason, seasons, id])
 
   const handlePlayEpisode = async (episode: EpisodeSummary) => {
+    const request = sourceRequests.current.begin()
     setSelectedEpisode(episode)
     setEpisodeSources([])
     setModalVisible(true)
@@ -121,14 +148,14 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         episodeTitle: episode.title,
         imdbId: show.imdb_id || show.imdbId
       })
-      if (res.results?.length) {
+      if (request.isCurrent() && res.results?.length) {
         const ranked = rankSources(res.results, playbackSettings)
         setEpisodeSources(ranked)
       }
     } catch {
-      setEpisodeSources([])
+      if (request.isCurrent()) setEpisodeSources([])
     } finally {
-      setIsSearchingEpisode(false)
+      if (request.isCurrent()) setIsSearchingEpisode(false)
     }
   }
 
@@ -140,6 +167,7 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
       const sNum = selectedEpisode.seasonNumber ?? (selectedEpisode as any).season_number ?? selectedSeason
       navigation.navigate('Player', {
         infoHash: hash,
+        contentKey: `episode:${show.id || slug}:${sNum}:${epNum}`,
         title: `${show.title} - S${sNum}E${epNum}: ${selectedEpisode.title}`,
         posterUrl: selectedEpisode.stillUrl || (selectedEpisode as any).still_url || show.poster_url || show.posterUrl,
         isSeries: true,
@@ -163,7 +191,8 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
   if (!show) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>Series not found.</Text>
+        <Text style={styles.errorText}>{loadError || 'Series not found.'}</Text>
+        <TouchableOpacity onPress={loadShow} style={{ padding: 16 }}><Text style={{ color: colors.primary }}>Retry</Text></TouchableOpacity>
       </View>
     )
   }
@@ -182,7 +211,14 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         <ArrowLeft size={20} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <ScrollView style={styles.scroll}>
+      <FlatList
+        style={styles.scroll}
+        data={episodes}
+        keyExtractor={(item: any, index) => String(item.id ?? item.episodeNumber ?? index)}
+        initialNumToRender={8}
+        windowSize={5}
+        ListHeaderComponent={<>
+
         <ImageBackground source={{ uri: backdrop }} style={styles.backdrop} resizeMode="cover">
         <View style={styles.backdropOverlay} />
       </ImageBackground>
@@ -220,6 +256,10 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
         </View>
 
         {/* Synopsis */}
+        <TouchableOpacity onPress={toggleWatchlist} accessibilityRole="button" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16 }}>
+          {isSaved ? <Check size={18} color={colors.primary} /> : <Plus size={18} color={colors.primary} />}
+          <Text style={{ color: colors.primary }}>{isSaved ? 'Remove from watchlist' : 'Add to watchlist'}</Text>
+        </TouchableOpacity>
         <Text style={styles.overview} numberOfLines={4}>
           {show.overview || show.summary?.replace(/<[^>]*>/g, '') || ''}
         </Text>
@@ -257,24 +297,20 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
           </View>
         ) : null}
 
-        {/* Episode List */}
-        <View style={styles.episodesSection}>
+
           <Text style={styles.sectionHeader}>Episodes</Text>
-          {isLoadingEpisodes ? (
-            <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 20 }} />
-          ) : episodes.length === 0 ? (
-            <Text style={styles.emptyText}>No episode list available.</Text>
-          ) : (
-            episodes.map((ep: any) => (
+        </View>
+        </>}
+        ListEmptyComponent={isLoadingEpisodes ? <ActivityIndicator color={colors.primary} /> : <Text style={styles.emptyText}>No episode list available.</Text>}
+        renderItem={({ item }: { item: any }) => <View style={styles.episodesSection}>
               <TouchableOpacity
-                key={ep.id}
                 style={styles.episodeCard}
-                onPress={() => handlePlayEpisode(ep)}
+                onPress={() => handlePlayEpisode(item)}
                 activeOpacity={0.7}
               >
-                {ep.stillUrl || ep.still_url ? (
+                {item.stillUrl || item.still_url ? (
                   <Image
-                    source={{ uri: ep.stillUrl || ep.still_url }}
+                    source={{ uri: item.stillUrl || item.still_url }}
                     style={styles.episodeStill}
                     resizeMode="cover"
                   />
@@ -285,31 +321,28 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
                 )}
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.episodeTitle} numberOfLines={1}>
-                    {ep.episodeNumber || ep.episode_number}. {ep.title}
+                    {item.episodeNumber || item.episode_number}. {item.title}
                   </Text>
                   <Text style={styles.episodeOverview} numberOfLines={2}>
-                    {ep.overview || ep.summary?.replace(/<[^>]*>/g, '') || 'Tap to search sources & stream'}
+                    {item.overview || item.summary?.replace(/<[^>]*>/g, '') || 'Tap to search sources & stream'}
                   </Text>
                 </View>
                 <View style={styles.playIconBox}>
                   <Play size={14} color="#ffffff" fill="#ffffff" />
                 </View>
               </TouchableOpacity>
-            ))
-          )}
-        </View>
-      </View>
-
+        </View>}
+      />
       {/* Episode Torrent Sources Modal */}
       <SourcePickerModal
         visible={modalVisible}
-        onClose={() => setModalVisible(false)}
+        onClose={() => { sourceRequests.current.cancel(); setIsSearchingEpisode(false); setModalVisible(false) }}
         onSelectSource={handleSelectSource}
         sources={episodeSources}
         isLoading={isSearchingEpisode}
         title={`${show.title} S${selectedSeason}E${selectedEpisode?.episodeNumber ?? (selectedEpisode as any)?.episode_number ?? 1}`}
       />
-      </ScrollView>
+
     </View>
   )
 }

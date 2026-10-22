@@ -29,6 +29,7 @@ import {
   openSubtitlesClient
 } from '@streamforge/core/clients'
 import { extractInfoHash } from '@streamforge/core/utils'
+import { PlaybackSessionManager, type SessionInfo } from '../playback/session-manager'
 
 const progressListeners = new Set<(data: TorrentProgress) => void>()
 const readyListeners = new Set<(data: TorrentInfo) => void>()
@@ -36,6 +37,7 @@ const errorListeners = new Set<(data: { infoHash: string; error: string }) => vo
 
 // In-memory active streams for mobile
 const activeStreams = new Map<string, TorrentInfo>()
+const activeSessions = new Map<string, string>()
 
 const DAEMON_PORT = 8888
 let daemonStartPromise: Promise<string> | null = null
@@ -51,11 +53,12 @@ type NativeTorrentStats = {
   downloaded?: number
   totalSize?: number
   bufferProgress?: number
+  error?: string
 }
 
 export const initializeMobileTorrentEngine = async (): Promise<string> => {
-  if (!TorrentDaemon) {
-    throw new Error('Torrent streaming requires the StreamForge Android development build')
+  if (!TorrentDaemon || TorrentDaemon.getProtocolVersion?.() !== 2) {
+    throw new Error('Playback requires the updated StreamForge Android native module')
   }
 
   if (!daemonStartPromise) {
@@ -73,6 +76,7 @@ export const shutdownMobileTorrentEngine = async (): Promise<void> => {
     statsTimer = null
   }
   activeStreams.clear()
+  activeSessions.clear()
   daemonStartPromise = null
   if (TorrentDaemon) {
     await TorrentDaemon.stopDaemon()
@@ -97,7 +101,7 @@ const emitProgress = (infoHash: string, stats: NativeTorrentStats) => {
     totalSize,
     timeRemaining: downloadSpeed > 0 ? remainingBytes / downloadSpeed : 0,
     ratio: 0,
-    bufferProgress: stats.bufferProgress ?? stats.progress ?? 0,
+    bufferProgress: stats.bufferProgress ?? 0,
     mode: 'stream',
     peerConnections: {
       discovered: connectedPeers,
@@ -131,17 +135,71 @@ const pollTorrentStats = async () => {
   statsPollInFlight = true
   try {
     await Promise.all(Array.from(activeStreams.keys()).map(async (infoHash) => {
+      const sessionId = activeSessions.get(infoHash)
+      if (!sessionId) return
       try {
-        const rawStats = await daemon.getStats(infoHash)
+        const rawStats = await daemon.getStats(sessionId)
+        if (activeSessions.get(infoHash) !== sessionId) return
         const stats = JSON.parse(rawStats) as NativeTorrentStats
+        if (stats.error) throw new Error(stats.error)
         if (stats.infoHash) emitProgress(infoHash, stats)
-      } catch {
-        // A stream can disappear between the active-stream snapshot and this poll.
+      } catch (error) {
+        if (activeSessions.get(infoHash) !== sessionId) return
+        const message = error instanceof Error ? error.message : 'Stream statistics are unavailable'
+        errorListeners.forEach(listener => listener({ infoHash, error: message }))
+        void playbackSessions.close().catch(() => {})
       }
     }))
   } finally {
     statsPollInFlight = false
   }
+}
+
+function registerSession(info: SessionInfo): TorrentInfo {
+  const stream: TorrentInfo = {
+    ...info, mode: 'stream',
+    selectedFileIndex: info.selectedFileIndex >= 0 ? info.selectedFileIndex : null,
+    fileSelectionMessage: info.requiresFileSelection ? 'Choose the video file to play.' : null
+  }
+  activeStreams.set(info.infoHash, stream)
+  activeSessions.set(info.infoHash, info.sessionId)
+  if (stream.ready) readyListeners.forEach(listener => listener(stream))
+  updateStatsPolling()
+  return stream
+}
+
+const playbackSessions = new PlaybackSessionManager({
+  start: initializeMobileTorrentEngine,
+  prepare: async (id, request) => {
+    if (!TorrentDaemon) throw new Error('Native torrent module is unavailable')
+    const raw = await TorrentDaemon.prepareSession(id, request.magnetURI, request.fileIndex ?? -1, request.season ?? 0, request.episode ?? 0)
+    const info = JSON.parse(raw) as SessionInfo
+    if (info.sessionId !== id || !Array.isArray(info.files)) throw new Error('Invalid native session response')
+    registerSession(info)
+    return info
+  },
+  cancel: async id => {
+    await TorrentDaemon?.cancelSession(id)
+    for (const [hash, session] of activeSessions) {
+      if (session === id) { activeSessions.delete(hash); activeStreams.delete(hash) }
+    }
+    updateStatsPolling()
+  },
+  stop: shutdownMobileTorrentEngine
+})
+
+export const beginMobilePlayback = (magnetURI: string, preferred?: PreferredEpisodeFile) => {
+  if (!extractInfoHash(magnetURI)) throw new Error('Invalid magnet link: missing info hash')
+  return playbackSessions.open({ magnetURI, fileIndex: preferred?.fileIndex, season: preferred?.seasonNumber, episode: preferred?.episodeNumber })
+}
+
+export async function selectMobileFile(sessionId: string, fileIndex: number): Promise<SessionInfo> {
+  if (!TorrentDaemon) throw new Error('Native torrent module is unavailable')
+  const info = JSON.parse(await TorrentDaemon.selectFile(sessionId, fileIndex)) as SessionInfo
+  if (activeSessions.get(info.infoHash) !== sessionId) throw new Error('Playback session was cancelled')
+  if (info.sessionId !== sessionId || !info.ready || !info.streamURL) throw new Error('Invalid selected-file response')
+  registerSession(info)
+  return info
 }
 
 const updateStatsPolling = () => {
@@ -158,40 +216,9 @@ const updateStatsPolling = () => {
 export const mobileTorrentAPI: TorrentAPI = {
   // ─── Streaming ─────────────────────────────────────────────────────────────
   addTorrent: async (magnetURI: string, preferredEpisode?: PreferredEpisodeFile): Promise<TorrentInfo> => {
-    const infoHash = extractInfoHash(magnetURI)
-    if (!infoHash) {
-      throw new Error('Invalid magnet link: missing info hash')
-    }
-    try {
-      await initializeMobileTorrentEngine()
-      if (!TorrentDaemon) throw new Error('Torrent daemon native module is unavailable')
-
-      const streamUrl = await TorrentDaemon.addMagnet(magnetURI, preferredEpisode?.fileIndex ?? -1)
-      if (typeof streamUrl !== 'string' || !/^https?:\/\//i.test(streamUrl)) {
-        throw new Error('Torrent daemon returned an invalid stream URL')
-      }
-
-      const info: TorrentInfo = {
-        infoHash,
-        name: 'Torrent Stream',
-        files: [],
-        totalSize: 0,
-        streamURL: streamUrl,
-        ready: true,
-        mode: 'stream',
-        selectedFileIndex: preferredEpisode?.fileIndex ?? null,
-        requiresFileSelection: false,
-        fileSelectionMessage: null
-      }
-      activeStreams.set(infoHash, info)
-      readyListeners.forEach((listener) => listener(info))
-      updateStatsPolling()
-      return info
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to start torrent stream'
-      errorListeners.forEach((listener) => listener({ infoHash, error: message }))
-      throw error
-    }
+    const attempt = beginMobilePlayback(magnetURI, preferredEpisode)
+    const info = await attempt.result
+    return activeStreams.get(info.infoHash)!
   },
 
   getStreams: async (): Promise<TorrentInfo[]> => {
@@ -199,18 +226,12 @@ export const mobileTorrentAPI: TorrentAPI = {
   },
 
   cleanupStream: async (infoHash: string): Promise<void> => {
-    activeStreams.delete(infoHash)
-    updateStatsPolling()
-    if (TorrentDaemon) {
-      try {
-        await TorrentDaemon.cleanupStream(infoHash)
-      } catch {}
-    }
+    if (activeStreams.has(infoHash)) await playbackSessions.close()
   },
 
   // ─── Downloads (placeholder for future download support) ───────────────────
   addDownload: async (magnetURI: string): Promise<TorrentInfo> => {
-    return mobileTorrentAPI.addTorrent(magnetURI)
+    throw new Error('Offline downloads are not supported on Android yet')
   },
 
   queueDownload: async (infoHash: string) => {
@@ -222,13 +243,7 @@ export const mobileTorrentAPI: TorrentAPI = {
 
   // ─── Shared ────────────────────────────────────────────────────────────────
   removeTorrent: async (infoHash: string): Promise<void> => {
-    activeStreams.delete(infoHash)
-    updateStatsPolling()
-    if (TorrentDaemon) {
-      try {
-        await TorrentDaemon.cleanupStream(infoHash)
-      } catch {}
-    }
+    await mobileTorrentAPI.cleanupStream(infoHash)
   },
 
   getTorrents: async (): Promise<TorrentInfo[]> => {
@@ -243,27 +258,12 @@ export const mobileTorrentAPI: TorrentAPI = {
     return stream.streamURL
   },
 
-  getMediaInfo: async (_infoHash: string): Promise<MediaInfo | null> => {
-    return {
-      videoCodec: 'h264',
-      audioCodec: 'aac',
-      audioTracks: [{ index: 0, codec: 'aac', language: 'eng', title: 'English', channels: 2, channelLayout: 'stereo', isDefault: true }],
-      subtitleTracks: [],
-      duration: 0,
-      width: 1920,
-      height: 1080,
-      needsVideoTranscode: false,
-      needsAudioTranscode: false,
-      needsTranscode: false
-    }
-  },
+  getMediaInfo: async (_infoHash: string): Promise<MediaInfo | null> => null,
 
   selectFile: async (infoHash: string, fileIndex: number): Promise<string> => {
-    const stream = activeStreams.get(infoHash)
-    if (stream) {
-      stream.selectedFileIndex = fileIndex
-    }
-    return `http://localhost:${DAEMON_PORT}/stream/${infoHash}?file=${fileIndex}`
+    const sessionId = activeSessions.get(infoHash)
+    if (!sessionId) throw new Error('No active playback session')
+    return (await selectMobileFile(sessionId, fileIndex)).streamURL
   },
 
   notifySeek: async (infoHash: string, position: number): Promise<void> => {
@@ -354,6 +354,12 @@ export const mobileTorrentAPI: TorrentAPI = {
     return movieCatalogClient.getMovie(movieId)
   },
 
-  getCacheSize: async (): Promise<number> => 0,
-  clearCache: async (): Promise<void> => {}
+  getCacheSize: async (): Promise<number> => {
+    if (!TorrentDaemon?.getCacheSize) throw new Error('Cache management requires the updated Android module')
+    return TorrentDaemon.getCacheSize()
+  },
+  clearCache: async (): Promise<void> => {
+    if (!TorrentDaemon?.clearCache) throw new Error('Cache management requires the updated Android module')
+    await TorrentDaemon.clearCache()
+  }
 }

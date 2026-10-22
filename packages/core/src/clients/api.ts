@@ -1,7 +1,7 @@
 /**
  * StreamForge API Client
  * Handles all communication with the backend services.
- * Falls back to mock data when the backend is unreachable.
+ * Callers render unavailable states when the backend cannot be reached.
  */
 
 function resolveDefaultAPIBase(): string {
@@ -20,6 +20,7 @@ interface RequestOptions {
   method?: string
   body?: unknown
   token?: string
+  signal?: AbortSignal
 }
 
 export class APIClient {
@@ -56,18 +57,31 @@ export class APIClient {
       headers['Authorization'] = `Bearer ${authToken}`
     }
 
-    const res = await fetch(`${this.baseURL}${endpoint}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined
-    })
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    if (options.signal?.aborted) controller.abort()
+    options.signal?.addEventListener('abort', abort, { once: true })
+    const timer = setTimeout(abort, 15_000)
+    try {
+      const res = await fetch(`${this.baseURL}${endpoint}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      })
 
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({ error: { message: res.statusText } }))) as any
-      throw new Error(err?.error?.message || `API Error: ${res.status}`)
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({ error: { message: res.statusText } }))) as any
+        const failure = new Error(err?.error?.message || `API Error: ${res.status}`) as Error & { status: number }
+        failure.status = res.status
+        throw failure
+      }
+
+      return await res.json() as T
+    } finally {
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
     }
-
-    return res.json() as Promise<T>
   }
 
   // ── Auth & Verification ───────────────────────
@@ -116,14 +130,14 @@ export class APIClient {
   }
 
   // ── Content ──────────────────────────────────
-  async getMovies(page = 1, perPage = 20, genre?: string) {
+  async getMovies(page = 1, perPage = 20, genre?: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ page: String(page), per_page: String(perPage) })
     if (genre) params.set('genre', genre)
-    return this.request(`/api/v1/movies?${params}`)
+    return this.request(`/api/v1/movies?${params}`, { signal })
   }
 
-  async getMovie(slug: string) {
-    return this.request(`/api/v1/movies/${slug}`)
+  async getMovie(slug: string, signal?: AbortSignal) {
+    return this.request(`/api/v1/movies/${slug}`, { signal })
   }
 
   async getTrending(limit = 20) {
@@ -142,10 +156,10 @@ export class APIClient {
     return this.request(`/api/v1/movies/${id}/magnets`)
   }
 
-  async getShows(page = 1, perPage = 20, genre?: string) {
+  async getShows(page = 1, perPage = 20, genre?: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ page: String(page), per_page: String(perPage) })
     if (genre) params.set('genre', genre)
-    return this.request(`/api/v1/shows?${params}`)
+    return this.request(`/api/v1/shows?${params}`, { signal })
   }
 
   async getShow(slug: string) {
@@ -160,8 +174,8 @@ export class APIClient {
     return this.getTrending(limit)
   }
 
-  async getMovieBySlug(slug: string) {
-    return this.getMovie(slug)
+  async getMovieBySlug(slug: string, signal?: AbortSignal) {
+    return this.getMovie(slug, signal)
   }
 
   async getShowBySlug(slug: string) {
@@ -287,13 +301,13 @@ export class APIClient {
   }
 
   // ── Search ───────────────────────────────────────
-  async search(query: string, type: 'movie' | 'show' | 'all' = 'all', page = 1) {
+  async search(query: string, type: 'movie' | 'show' | 'all' = 'all', page = 1, signal?: AbortSignal) {
     const params = new URLSearchParams({ q: query, type, page: String(page) })
-    return this.request<{ data: any[]; meta: { total: number; page: number; per_page: number } }>(`/api/v1/search?${params}`)
+    return this.request<{ data: any[]; meta: { total: number; page: number; per_page: number } }>(`/api/v1/search?${params}`, { signal })
   }
 
-  async searchSuggest(query: string) {
-    return this.request<{ data: any[] }>(`/api/v1/search/suggest?q=${encodeURIComponent(query)}`)
+  async searchSuggest(query: string, signal?: AbortSignal) {
+    return this.request<{ data: any[] }>(`/api/v1/search/suggest?q=${encodeURIComponent(query)}`, { signal })
   }
 }
 

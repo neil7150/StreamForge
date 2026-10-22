@@ -14,6 +14,7 @@ export type RootStackParamList = {
   SeriesDetail: { slug: string; id?: string | number }
   Player: {
     infoHash: string
+    contentKey?: string
     title: string
     posterUrl?: string | null
     streamURL?: string

@@ -1,12 +1,15 @@
-import React from 'react'
+import React, { useState, useCallback } from 'react'
+import Constants from 'expo-constants'
+import { useFocusEffect } from '@react-navigation/native'
+import { mobileTorrentAPI } from '../native/torrent-engine'
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Switch,
-  Alert
+  Alert,
+  TextInput
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -18,6 +21,7 @@ import {
   type SubtitleMode
 } from '@streamforge/core'
 import { colors } from '../theme/colors'
+import { flushMobileStorage } from '../storage/mobile-storage'
 import type { RootStackParamList } from '../navigation/types'
 import {
   User,
@@ -34,12 +38,20 @@ export function SettingsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>()
 
   const settings = usePlaybackSettingsStore()
+  const [cacheBytes, setCacheBytes] = useState<number | null>(null)
+  const [clearingCache, setClearingCache] = useState(false)
+  const [subtitleKey, setSubtitleKey] = useState(settings.openSubtitlesApiKey)
+  const [savingKey, setSavingKey] = useState(false)
+  useFocusEffect(useCallback(() => {
+    let active = true
+    void mobileTorrentAPI.getCacheSize().then(size => { if (active) setCacheBytes(size) }).catch(() => { if (active) setCacheBytes(null) })
+    return () => { active = false }
+  }, []))
   const { user, isAuthenticated, logout } = useAuthStore()
 
   const qualityOptions: PreferredQuality[] = ['auto', '1080p', '720p', '2160p']
   const subtitleOptions: { label: string; value: SubtitleMode }[] = [
     { label: 'Auto', value: 'auto' },
-    { label: 'Always', value: 'always' },
     { label: 'Off', value: 'off' }
   ]
   const languageOptions = [
@@ -63,10 +75,16 @@ export function SettingsScreen() {
     ])
   }
 
-  const handleClearCache = () => {
-    Alert.alert('Clear Cache', 'Torrent metadata and search cache have been cleared.', [
-      { text: 'OK' }
-    ])
+  const handleClearCache = async () => {
+    if (clearingCache) return
+    setClearingCache(true)
+    try {
+      await mobileTorrentAPI.clearCache()
+      setCacheBytes(await mobileTorrentAPI.getCacheSize())
+      Alert.alert('Cache cleared', 'Temporary stream files have been removed.')
+    } catch (error) {
+      Alert.alert('Cache could not be cleared', error instanceof Error ? error.message : 'Please retry.')
+    } finally { setClearingCache(false) }
   }
 
   return (
@@ -135,54 +153,6 @@ export function SettingsScreen() {
 
           <View style={styles.divider} />
 
-          {/* Prefer Direct Play */}
-          <View style={styles.switchRow}>
-            <View style={styles.switchTextCol}>
-              <Text style={styles.settingLabel}>Prefer Direct Play</Text>
-              <Text style={styles.settingDesc}>Use hardware decoding directly without transcoding</Text>
-            </View>
-            <Switch
-              value={settings.preferDirectPlay}
-              onValueChange={(val: boolean) => settings.updateSettings({ preferDirectPlay: val })}
-              thumbColor={settings.preferDirectPlay ? colors.primary : colors.mutedForeground}
-              trackColor={{ false: colors.muted, true: colors.primary + '66' }}
-            />
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Autoplay Next Episode */}
-          <View style={styles.switchRow}>
-            <View style={styles.switchTextCol}>
-              <Text style={styles.settingLabel}>Autoplay Next Episode</Text>
-              <Text style={styles.settingDesc}>Automatically play the next episode when current ends</Text>
-            </View>
-            <Switch
-              value={settings.autoplayNextEpisode}
-              onValueChange={(val: boolean) => settings.updateSettings({ autoplayNextEpisode: val })}
-              thumbColor={settings.autoplayNextEpisode ? colors.primary : colors.mutedForeground}
-              trackColor={{ false: colors.muted, true: colors.primary + '66' }}
-            />
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Automatic Fallback */}
-          <View style={styles.switchRow}>
-            <View style={styles.switchTextCol}>
-              <Text style={styles.settingLabel}>Automatic Fallback</Text>
-              <Text style={styles.settingDesc}>Try alternative torrent sources if chosen one is stalled</Text>
-            </View>
-            <Switch
-              value={settings.automaticSourceFallback}
-              onValueChange={(val: boolean) => settings.updateSettings({ automaticSourceFallback: val })}
-              thumbColor={settings.automaticSourceFallback ? colors.primary : colors.mutedForeground}
-              trackColor={{ false: colors.muted, true: colors.primary + '66' }}
-            />
-          </View>
-
-          <View style={styles.divider} />
-
           {/* Minimum Seeders */}
           <Text style={styles.settingLabel}>Minimum Seeders Filter</Text>
           <View style={styles.chipRow}>
@@ -210,6 +180,27 @@ export function SettingsScreen() {
 
         <View style={styles.card}>
           <Text style={styles.settingLabel}>Subtitle Display</Text>
+          <Text style={styles.settingDesc}>Add your OpenSubtitles API key to enable online subtitles.</Text>
+          <TextInput
+            value={subtitleKey}
+            onChangeText={setSubtitleKey}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="OpenSubtitles API key"
+            placeholderTextColor={colors.mutedForeground}
+            accessibilityLabel="OpenSubtitles API key"
+            style={{ color: colors.foreground, paddingVertical: 12 }}
+          />
+          <TouchableOpacity disabled={savingKey} style={{ paddingVertical: 12 }} onPress={() => {
+            setSavingKey(true)
+            settings.updateSettings({ openSubtitlesApiKey: subtitleKey.trim() })
+            void flushMobileStorage().then(() => Alert.alert('Saved', 'Your subtitle key has been saved.'))
+              .catch(() => Alert.alert('Could not save', 'Please retry before closing the app.'))
+              .finally(() => setSavingKey(false))
+          }} accessibilityRole="button">
+            <Text style={{ color: colors.primary }}>{savingKey ? 'Saving…' : 'Save key'}</Text>
+          </TouchableOpacity>
           <View style={styles.chipRow}>
             {subtitleOptions.map((opt) => (
               <TouchableOpacity
@@ -247,13 +238,13 @@ export function SettingsScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Info size={18} color={colors.primary} />
-          <Text style={styles.sectionTitle}>Architecture & Diagnostics</Text>
+          <Text style={styles.sectionTitle}>App & Storage</Text>
         </View>
 
         <View style={styles.card}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>App Version</Text>
-            <Text style={styles.infoValue}>1.0.0 (Expo SDK 52)</Text>
+            <Text style={styles.infoValue}>{Constants.expoConfig?.version || 'Unknown'}</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.infoRow}>
@@ -263,19 +254,20 @@ export function SettingsScreen() {
           <View style={styles.divider} />
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Decoder</Text>
-            <Text style={styles.infoValue}>Android ExoPlayer (Hardware)</Text>
+            <Text style={styles.infoValue}>Native video player</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Storage Mode</Text>
-            <Text style={styles.infoValue}>Stream-Only (RAM/Buffer)</Text>
+            <Text style={styles.infoValue}>Temporary disk cache</Text>
           </View>
 
           <View style={styles.divider} />
 
-          <TouchableOpacity style={styles.clearCacheButton} onPress={handleClearCache} activeOpacity={0.7}>
+          <Text style={styles.settingDesc}>Cache: {cacheBytes === null ? 'Unavailable' : `${(cacheBytes / 1048576).toFixed(1)} MiB`}. Streaming stops if the 512 MiB cache limit is reached.</Text>
+          <TouchableOpacity style={styles.clearCacheButton} onPress={() => { void handleClearCache() }} disabled={clearingCache} activeOpacity={0.7}>
             <Trash2 size={16} color={colors.mutedForeground} />
-            <Text style={styles.clearCacheText}>Clear Stream Cache</Text>
+            <Text style={styles.clearCacheText}>{clearingCache ? 'Clearing…' : 'Clear Stream Cache'}</Text>
           </TouchableOpacity>
         </View>
       </View>

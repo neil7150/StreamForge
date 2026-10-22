@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { MediaCard } from '../components/ui/MediaCard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
 import { api } from '@streamforge/core/clients'
-import { MOCK_GENRES, MOCK_MOVIES } from '@streamforge/core/utils'
+import { RequestGate } from '../data/request-gate'
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Browse'>,
@@ -32,44 +32,50 @@ export const BrowseScreen = ({ navigation, route }: Props) => {
   const [selectedType, setSelectedType] = useState<'movie' | 'show'>('movie')
   const [selectedGenre, setSelectedGenre] = useState<string>(route.params?.genre || 'all')
   const [items, setItems] = useState<any[]>([])
-  const [genres, setGenres] = useState(MOCK_GENRES)
+  const [genres, setGenres] = useState([{ id: 'all', name: 'All', slug: 'all' }])
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const requests = useRef(new RequestGate())
+  const inFlight = useRef(false)
 
   const loadData = useCallback(async (pageNum = 1, append = false) => {
+    const request = requests.current.begin()
+    inFlight.current = true
+    setLoadError(null)
     try {
       if (pageNum === 1) setIsLoading(true)
       else setLoadingMore(true)
 
       if (selectedType === 'movie') {
-        const res = await api.getMovies(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre)
+        const res = await api.getMovies(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
+        if (!request.isCurrent()) return
         const newItems = res?.data || []
-        setItems(append ? (prev) => [...prev, ...newItems] : newItems)
-        setHasMore(newItems.length >= 24)
+        setItems(append ? (prev) => [...prev, ...newItems].slice(0, 480) : newItems)
+        setHasMore(newItems.length >= 24 && pageNum < 20)
       } else {
-        const res = await api.getShows(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre)
+        const res = await api.getShows(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
+        if (!request.isCurrent()) return
         const newItems = res?.data || []
-        setItems(append ? (prev) => [...prev, ...newItems] : newItems)
-        setHasMore(newItems.length >= 24)
+        setItems(append ? (prev) => [...prev, ...newItems].slice(0, 480) : newItems)
+        setHasMore(newItems.length >= 24 && pageNum < 20)
       }
     } catch {
-      // Fallback to mock data
-      const mockFiltered = selectedGenre === 'all'
-        ? MOCK_MOVIES
-        : MOCK_MOVIES.filter((m) => m.genre.some((g) => g.toLowerCase() === selectedGenre.toLowerCase()))
-      setItems(mockFiltered)
+      if (!request.isCurrent()) return
+      if (!append) setItems([])
+      setLoadError('Could not load titles. Check your connection and retry.')
       setHasMore(false)
     } finally {
-      setIsLoading(false)
-      setLoadingMore(false)
+      if (request.isCurrent()) { inFlight.current = false; setIsLoading(false); setLoadingMore(false) }
     }
   }, [selectedType, selectedGenre])
 
   useEffect(() => {
     setPage(1)
     loadData(1, false)
+    return () => requests.current.cancel()
   }, [loadData])
 
   useEffect(() => {
@@ -81,7 +87,7 @@ export const BrowseScreen = ({ navigation, route }: Props) => {
   }, [])
 
   const handleEndReached = () => {
-    if (!loadingMore && hasMore && !isLoading) {
+    if (!inFlight.current && !loadingMore && hasMore && !isLoading) {
       const nextPage = page + 1
       setPage(nextPage)
       loadData(nextPage, true)
@@ -140,6 +146,12 @@ export const BrowseScreen = ({ navigation, route }: Props) => {
       </View>
 
       {/* Content Grid */}
+      {loadError ? (
+        <TouchableOpacity onPress={() => { setPage(1); void loadData(1) }} style={{ padding: 16 }} accessibilityRole="button">
+          <Text style={{ color: colors.textSecondary }}>{loadError}</Text>
+          <Text style={{ color: colors.primary }}>Retry</Text>
+        </TouchableOpacity>
+      ) : null}
       {isLoading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={colors.primary} />

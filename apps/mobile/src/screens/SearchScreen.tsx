@@ -21,6 +21,9 @@ import { api } from '@streamforge/core/clients'
 import { searchMovieTorrents } from '@streamforge/core/search'
 import { isValidMagnet, extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult } from '@streamforge/core/types'
+import { RequestGate } from '../data/request-gate'
+import { rankSources } from '@streamforge/core/policies'
+import { usePlaybackSettingsStore } from '@streamforge/core/stores'
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Search'>,
@@ -38,14 +41,24 @@ export const SearchScreen = ({ navigation }: Props) => {
   // Torrent source picker modal
   const [modalVisible, setModalVisible] = useState(false)
   const [activeMediaTitle, setActiveMediaTitle] = useState('')
+  const [activeContentKey, setActiveContentKey] = useState<string | undefined>()
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [torrentSources, setTorrentSources] = useState<TorrentSearchResult[]>([])
 
   const debounceTimer = useRef<NodeJS.Timeout | null>(null)
+  const requests = useRef(new RequestGate())
+  const sourceRequests = useRef(new RequestGate())
+  useEffect(() => () => {
+    requests.current.cancel(); sourceRequests.current.cancel()
+    if (debounceTimer.current) clearTimeout(debounceTimer.current)
+  }, [])
 
   const isMagnet = isValidMagnet(query)
   const infoHash = extractInfoHash(query)
 
   const handleSearch = useCallback(async (text: string) => {
+    const request = requests.current.begin()
+    setSearchError(null)
     if (!text || text.trim().length < 2) {
       setResults([])
       setSuggestions([])
@@ -60,27 +73,33 @@ export const SearchScreen = ({ navigation }: Props) => {
     setIsLoading(true)
     try {
       const [searchRes, suggestRes] = await Promise.allSettled([
-        api.search(text),
-        api.searchSuggest(text)
+        api.search(text, 'all', 1, request.signal),
+        api.searchSuggest(text, request.signal)
       ])
+      if (!request.isCurrent()) return
 
       if (searchRes.status === 'fulfilled' && searchRes.value?.data) {
         setResults(searchRes.value.data)
       } else {
         setResults([])
+        setSearchError('Search is unavailable. Check your connection and retry.')
       }
 
       if (suggestRes.status === 'fulfilled' && suggestRes.value?.data) {
         setSuggestions(suggestRes.value.data)
-      }
+      } else setSuggestions([])
     } catch {
-      setResults([])
+      if (request.isCurrent()) { setResults([]); setSearchError('Search is unavailable. Please retry.') }
     } finally {
-      setIsLoading(false)
+      if (request.isCurrent()) setIsLoading(false)
     }
   }, [])
 
   const onChangeText = (text: string) => {
+    requests.current.cancel()
+    setIsLoading(false)
+    setSuggestions([])
+    setResults([])
     setQuery(text)
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
     debounceTimer.current = setTimeout(() => {
@@ -89,6 +108,7 @@ export const SearchScreen = ({ navigation }: Props) => {
   }
 
   const handleSelectSuggestion = (suggestion: any) => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current)
     setQuery(suggestion.title)
     Keyboard.dismiss()
     handleSearch(suggestion.title)
@@ -104,7 +124,9 @@ export const SearchScreen = ({ navigation }: Props) => {
   }
 
   const handleScrapeTorrentSources = async (media: any) => {
+    const request = sourceRequests.current.begin()
     setActiveMediaTitle(media.title)
+    setActiveContentKey(media.id || media.slug ? `movie:${media.id || media.slug}` : undefined)
     setTorrentSources([])
     setModalVisible(true)
     setIsSearchingTorrents(true)
@@ -115,11 +137,11 @@ export const SearchScreen = ({ navigation }: Props) => {
         title: media.title,
         year
       })
-      setTorrentSources(res.results || [])
+      if (request.isCurrent()) setTorrentSources(rankSources(res.results || [], usePlaybackSettingsStore.getState()))
     } catch {
-      setTorrentSources([])
+      if (request.isCurrent()) setTorrentSources([])
     } finally {
-      setIsSearchingTorrents(false)
+      if (request.isCurrent()) setIsSearchingTorrents(false)
     }
   }
 
@@ -129,6 +151,7 @@ export const SearchScreen = ({ navigation }: Props) => {
     if (hash) {
       navigation.navigate('Player', {
         infoHash: hash,
+        contentKey: activeContentKey,
         title: activeMediaTitle || source.name,
         magnetURI: source.magnetURI,
         fileIndex: source.fileIndex
@@ -142,7 +165,7 @@ export const SearchScreen = ({ navigation }: Props) => {
         <SearchBar
           value={query}
           onChangeText={onChangeText}
-          onSubmit={() => handleSearch(query)}
+          onSubmit={() => { if (debounceTimer.current) clearTimeout(debounceTimer.current); void handleSearch(query) }}
         />
       </View>
 
@@ -196,7 +219,8 @@ export const SearchScreen = ({ navigation }: Props) => {
           ListEmptyComponent={
             query.length >= 2 && !isMagnet ? (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyTitle}>No catalog results</Text>
+                <Text style={styles.emptyTitle}>{searchError || 'No catalog results'}</Text>
+                {searchError ? <TouchableOpacity onPress={() => { void handleSearch(query) }} style={{ padding: 16 }}><Text style={{ color: colors.primary }}>Retry</Text></TouchableOpacity> : null}
                 <TouchableOpacity
                   style={styles.scrapeBtn}
                   onPress={() => handleScrapeTorrentSources({ title: query })}
@@ -249,7 +273,7 @@ export const SearchScreen = ({ navigation }: Props) => {
       {/* Torrent source picker modal */}
       <SourcePickerModal
         visible={modalVisible}
-        onClose={() => setModalVisible(false)}
+        onClose={() => { sourceRequests.current.cancel(); setIsSearchingTorrents(false); setModalVisible(false) }}
         onSelectSource={handleSelectTorrentSource}
         sources={torrentSources}
         isLoading={isSearchingTorrents}

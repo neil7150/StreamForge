@@ -1,0 +1,18 @@
+// This entry point is intentionally restricted to compiling/testing libraries.
+def allowedTasks = [
+    ':streamforge-torrent-daemon:compileDebugKotlin',
+    ':streamforge-torrent-daemon:testDebugUnitTest'
+]
+if (gradle.startParameter.taskNames.any { !(it in allowedTasks) }) {
+    throw new GradleException('Native validation permits only the named Kotlin library compile and unit-test tasks. APK tasks are prohibited.')
+}
+gradle.taskGraph.whenReady { graph ->
+    def forbidden = graph.allTasks.findAll { task ->
+        task.project.path == ':app' ||
+        task.name ==~ /(?i)(assemble|install|connected).*/ ||
+        task.class.name ==~ /.*(PackageApplication|PackageBundle|InstallVariantTask).*/
+    }
+    if (!forbidden.isEmpty()) {
+        throw new GradleException("Native validation refused app/packaging tasks: ${forbidden*.path.join(', ')}")
+    }
+}
