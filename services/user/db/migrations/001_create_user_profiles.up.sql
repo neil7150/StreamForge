@@ -27,7 +27,7 @@ CREATE TABLE watch_history (
     title        VARCHAR(500),
     poster_url   TEXT,
     progress     DECIMAL(5,4) DEFAULT 0,
-    current_time DECIMAL(10,2),
+    "current_time" DECIMAL(10,2),
     duration     DECIMAL(10,2),
     metadata     JSONB DEFAULT '{}',
     watched_at   TIMESTAMPTZ DEFAULT NOW(),

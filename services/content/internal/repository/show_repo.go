@@ -67,7 +67,7 @@ func (r *ShowRepository) List(ctx context.Context, page, perPage int, genreSlug,
 	var args []interface{}
 	argIdx := 1
 
-	conditions = append(conditions, "s.status = 'active'")
+	conditions = append(conditions, "s.status IN ('ongoing', 'ended', 'cancelled')")
 
 	if genreSlug != "" {
 		conditions = append(conditions, fmt.Sprintf(
@@ -97,7 +97,7 @@ func (r *ShowRepository) List(ctx context.Context, page, perPage int, genreSlug,
 	offset := (page - 1) * perPage
 	args = append(args, perPage, offset)
 
-	query := fmt.Sprintf(`SELECT %s FROM shows s %s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
+	query := fmt.Sprintf(`SELECT %s FROM shows s %s ORDER BY %s %s, s.id ASC LIMIT $%d OFFSET $%d`,
 		showColumns, where, sortCol, orderDir, argIdx, argIdx+1,
 	)
 
@@ -116,7 +116,7 @@ func (r *ShowRepository) List(ctx context.Context, page, perPage int, genreSlug,
 }
 
 func (r *ShowRepository) GetBySlug(ctx context.Context, slug string) (model.Show, error) {
-	query := fmt.Sprintf("SELECT %s FROM shows s WHERE s.slug = $1", showColumns)
+	query := fmt.Sprintf("SELECT %s FROM shows s WHERE s.slug = $1 AND s.status IN ('ongoing', 'ended', 'cancelled')", showColumns)
 	s, err := scanShow(r.db.QueryRow(ctx, query, slug))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -290,33 +290,58 @@ func (r *ShowRepository) GetEpisodes(ctx context.Context, seasonID uuid.UUID) ([
 }
 
 func (r *ShowRepository) CreateSeason(ctx context.Context, s model.Season) (model.Season, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return s, err
+	}
+	defer tx.Rollback(ctx)
 	query := `INSERT INTO seasons (show_id, season_number, title, overview, poster_url, air_date)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, show_id, season_number, title, overview, poster_url, air_date, episode_count`
 
-	err := r.db.QueryRow(ctx, query,
+	err = tx.QueryRow(ctx, query,
 		s.ShowID, s.SeasonNumber, s.Title, s.Overview, s.PosterURL, s.AirDate,
 	).Scan(&s.ID, &s.ShowID, &s.SeasonNumber, &s.Title, &s.Overview, &s.PosterURL, &s.AirDate, &s.EpisodeCount)
-	
+
 	if err != nil {
 		return s, fmt.Errorf("create season: %w", err)
 	}
-	return s, nil
+	if _, err = tx.Exec(ctx, "UPDATE shows SET season_count = season_count + 1 WHERE id = $1", s.ShowID); err != nil {
+		return s, err
+	}
+	return s, tx.Commit(ctx)
 }
 
 func (r *ShowRepository) CreateEpisode(ctx context.Context, e model.Episode) (model.Episode, error) {
-	query := `INSERT INTO episodes (season_id, episode_number, title, overview, runtime_minutes, air_date, still_url)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, season_id, episode_number, title, overview, runtime_minutes, air_date, still_url`
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return e, err
+	}
+	defer tx.Rollback(ctx)
+	query := `INSERT INTO episodes (show_id, season_id, episode_number, title, overview, runtime_minutes, air_date, still_url)
+		SELECT show_id, id, $2, $3, $4, $5, $6, $7 FROM seasons WHERE id = $1
+		RETURNING id, show_id, season_id, episode_number, title, overview, runtime_minutes, air_date, still_url`
 
-	err := r.db.QueryRow(ctx, query,
+	err = tx.QueryRow(ctx, query,
 		e.SeasonID, e.EpisodeNumber, e.Title, e.Overview, e.RuntimeMinutes, e.AirDate, e.StillURL,
-	).Scan(&e.ID, &e.SeasonID, &e.EpisodeNumber, &e.Title, &e.Overview, &e.RuntimeMinutes, &e.AirDate, &e.StillURL)
-	
+	).Scan(&e.ID, &e.ShowID, &e.SeasonID, &e.EpisodeNumber, &e.Title, &e.Overview, &e.RuntimeMinutes, &e.AirDate, &e.StillURL)
+
 	if err != nil {
 		return e, fmt.Errorf("create episode: %w", err)
 	}
-	return e, nil
+	if _, err = tx.Exec(ctx, "UPDATE seasons SET episode_count = episode_count + 1 WHERE id = $1", e.SeasonID); err != nil {
+		return e, err
+	}
+	if _, err = tx.Exec(ctx, "UPDATE shows SET episode_count = episode_count + 1 WHERE id = $1", e.ShowID); err != nil {
+		return e, err
+	}
+	return e, tx.Commit(ctx)
+}
+
+func (r *ShowRepository) PublicEpisodeShowID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	var showID uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT e.show_id FROM episodes e JOIN shows s ON s.id = e.show_id WHERE e.id = $1 AND s.status IN ('ongoing', 'ended', 'cancelled')`, id).Scan(&showID)
+	return showID, err
 }
 
 func (r *ShowRepository) IncrementViewCount(ctx context.Context, id uuid.UUID) error {

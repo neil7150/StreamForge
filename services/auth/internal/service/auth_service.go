@@ -180,16 +180,14 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*d
 	// Hash the incoming refresh token
 	tokenHash := hashRefreshToken(refreshToken)
 
-	// Look up the token in Redis
-	userID, err := s.tokenRepo.GetRefreshToken(ctx, tokenHash)
+	// A refresh token is single-use, including across simultaneous requests.
+	userID, err := s.tokenRepo.ConsumeRefreshToken(ctx, tokenHash)
 	if err != nil {
-		s.logger.Warn().Msg("invalid refresh token presented")
-		return nil, ErrInvalidToken
-	}
-
-	// Revoke the old refresh token (rotation)
-	if err := s.tokenRepo.RevokeRefreshToken(ctx, tokenHash); err != nil {
-		s.logger.Error().Err(err).Msg("failed to revoke old refresh token")
+		if errors.Is(err, repository.ErrRefreshTokenNotFound) {
+			s.logger.Warn().Msg("invalid refresh token presented")
+			return nil, ErrInvalidToken
+		}
+		return nil, fmt.Errorf("refresh token store unavailable: %w", err)
 	}
 
 	// Fetch the user to ensure they still exist and are active
@@ -223,6 +221,7 @@ func (s *AuthService) Logout(ctx context.Context, refreshToken, jwtID string) er
 		tokenHash := hashRefreshToken(refreshToken)
 		if err := s.tokenRepo.RevokeRefreshToken(ctx, tokenHash); err != nil {
 			s.logger.Error().Err(err).Msg("failed to revoke refresh token during logout")
+			return fmt.Errorf("revoke refresh token: %w", err)
 		}
 	}
 

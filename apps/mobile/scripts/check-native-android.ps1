@@ -1,4 +1,4 @@
-param([switch]$Offline)
+param([switch]$Offline, [switch]$StripSymbols)
 
 $ErrorActionPreference = 'Stop'
 $mobileDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -16,7 +16,8 @@ if (-not $env:JAVA_HOME -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HO
 if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 $env:NODE_ENV = 'development'
 
-& (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1')
+$nativeBindingOptions = @{ StripSymbols = [bool]$StripSymbols }
+& (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1') @nativeBindingOptions
 if ($LASTEXITCODE -ne 0) { throw 'Go library binding failed.' }
 
 $tasks = @(':streamforge-torrent-daemon:compileDebugKotlin', ':streamforge-torrent-daemon:testDebugUnitTest')

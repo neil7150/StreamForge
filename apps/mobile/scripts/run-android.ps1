@@ -1,6 +1,7 @@
 param(
   [switch]$AssembleOnly,
   [switch]$Release,
+  [switch]$StandaloneTest,
   [switch]$AuthorizeApkBuild
 )
 
@@ -8,15 +9,18 @@ $ErrorActionPreference = 'Stop'
 if (-not $AuthorizeApkBuild) {
   throw 'APK generation requires explicit user permission. Pass -AuthorizeApkBuild only after that permission is given.'
 }
+if ($Release -and $StandaloneTest) { throw 'Choose either delivery Release or StandaloneTest, not both.' }
+if ($StandaloneTest -and -not $AssembleOnly) { throw 'StandaloneTest requires -AssembleOnly; this builds a local APK without installing it.' }
 if ($Release) {
   foreach ($signingName in @('STREAMFORGE_KEYSTORE_PATH', 'STREAMFORGE_KEYSTORE_PASSWORD', 'STREAMFORGE_KEY_ALIAS', 'STREAMFORGE_KEY_PASSWORD')) {
     if (-not [Environment]::GetEnvironmentVariable($signingName)) { throw "Required release signing variable is missing: $signingName" }
   }
   if (-not (Test-Path -LiteralPath $env:STREAMFORGE_KEYSTORE_PATH -PathType Leaf)) { throw 'The release keystore does not exist.' }
-  $backendUri = $null
-  if (-not [Uri]::TryCreate($env:EXPO_PUBLIC_API_BASE_URL, [UriKind]::Absolute, [ref]$backendUri) -or $backendUri.Scheme -ne 'https' -or $backendUri.UserInfo -or $backendUri.Query -or $backendUri.Fragment) {
-    throw 'Release requires an explicit HTTPS EXPO_PUBLIC_API_BASE_URL without embedded credentials or query tokens.'
+  if ($env:STREAMFORGE_KEY_ALIAS -eq 'androiddebugkey' -or (Split-Path -Leaf $env:STREAMFORGE_KEYSTORE_PATH) -eq 'debug.keystore') {
+    throw 'Release delivery requires a private release signing identity; Android debug keys are not allowed.'
   }
+  $mobileConfig = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\app.json') -Raw | ConvertFrom-Json
+  if ($mobileConfig.expo.extra.runtimeMode -ne 'device-local') { throw 'Review release prerequisites before enabling a server-backed mobile mode.' }
 }
 $mobileDirectory = Resolve-Path (Join-Path $PSScriptRoot '..')
 $localJdkRoot = Join-Path $mobileDirectory '.expo\jdk17'
@@ -33,13 +37,14 @@ if (-not $jdk) {
 }
 
 $env:JAVA_HOME = $jdk.FullName
-$env:NODE_ENV = if ($Release) { 'production' } else { 'development' }
+$env:NODE_ENV = if ($Release -or $StandaloneTest) { 'production' } else { 'development' }
 if (-not $env:ANDROID_HOME) {
   $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 }
 
 $androidDirectory = Join-Path $mobileDirectory 'android'
-& (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1')
+$nativeBindingOptions = @{ StripSymbols = [bool]($Release -or $StandaloneTest) }
+& (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1') @nativeBindingOptions
 if ($LASTEXITCODE -ne 0) { throw 'Native torrent binding generation failed.' }
 
 # Apply tracked config plugins to existing generated projects as well.
@@ -71,7 +76,7 @@ if ($AssembleOnly) {
 
   Push-Location $androidDirectory
   try {
-    $assemblyTask = if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
+    $assemblyTask = if ($StandaloneTest) { 'assembleStandaloneTest' } elseif ($Release) { 'assembleRelease' } else { 'assembleDebug' }
     & .\gradlew.bat $assemblyTask '-PreactNativeArchitectures=arm64-v8a'
     exit $LASTEXITCODE
   } finally {

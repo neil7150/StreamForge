@@ -71,51 +71,52 @@ func (q *ListShowsQuery) Normalize() {
 
 // CreateMovieRequest is the request body for creating a movie.
 type CreateMovieRequest struct {
-	Title          string    `json:"title" validate:"required,min=1,max=500"`
-	Overview       *string   `json:"overview"`
-	Tagline        *string   `json:"tagline"`
-	ReleaseDate    *string   `json:"release_date"`
-	RuntimeMinutes *int      `json:"runtime_minutes" validate:"omitempty,min=1"`
-	Language       string    `json:"language" validate:"required,min=2,max=10"`
-	PosterURL      *string   `json:"poster_url" validate:"omitempty,url"`
-	BackdropURL    *string   `json:"backdrop_url" validate:"omitempty,url"`
-	TrailerURL     *string   `json:"trailer_url" validate:"omitempty,url"`
-	ImdbID         *string   `json:"imdb_id"`
-	ContentRating  *string   `json:"content_rating"`
-	LicenseType    string    `json:"license_type" validate:"required"`
-	LicenseURL     *string   `json:"license_url" validate:"omitempty,url"`
+	Title          string      `json:"title" validate:"required,min=1,max=500"`
+	Overview       *string     `json:"overview"`
+	Tagline        *string     `json:"tagline"`
+	ReleaseDate    *string     `json:"release_date"`
+	RuntimeMinutes *int        `json:"runtime_minutes" validate:"omitempty,min=1"`
+	Language       string      `json:"language" validate:"required,min=2,max=10"`
+	PosterURL      *string     `json:"poster_url" validate:"omitempty,url"`
+	BackdropURL    *string     `json:"backdrop_url" validate:"omitempty,url"`
+	TrailerURL     *string     `json:"trailer_url" validate:"omitempty,url"`
+	ImdbID         *string     `json:"imdb_id"`
+	ContentRating  *string     `json:"content_rating"`
+	LicenseType    string      `json:"license_type" validate:"required"`
+	LicenseURL     *string     `json:"license_url" validate:"omitempty,url"`
 	GenreIDs       []uuid.UUID `json:"genre_ids"`
 }
 
 // UpdateMovieRequest is the request body for updating a movie.
 type UpdateMovieRequest struct {
-	Title          *string   `json:"title" validate:"omitempty,min=1,max=500"`
-	Overview       *string   `json:"overview"`
-	Tagline        *string   `json:"tagline"`
-	ReleaseDate    *string   `json:"release_date"`
-	RuntimeMinutes *int      `json:"runtime_minutes" validate:"omitempty,min=1"`
-	Language       *string   `json:"language" validate:"omitempty,min=2,max=10"`
-	PosterURL      *string   `json:"poster_url" validate:"omitempty,url"`
-	BackdropURL    *string   `json:"backdrop_url" validate:"omitempty,url"`
-	TrailerURL     *string   `json:"trailer_url" validate:"omitempty,url"`
-	ImdbID         *string   `json:"imdb_id"`
-	ContentRating  *string   `json:"content_rating"`
-	LicenseType    *string   `json:"license_type"`
-	LicenseURL     *string   `json:"license_url" validate:"omitempty,url"`
-	Status         *string   `json:"status" validate:"omitempty,oneof=active inactive pending_review"`
+	Title          *string     `json:"title" validate:"omitempty,min=1,max=500"`
+	Overview       *string     `json:"overview"`
+	Tagline        *string     `json:"tagline"`
+	ReleaseDate    *string     `json:"release_date"`
+	RuntimeMinutes *int        `json:"runtime_minutes" validate:"omitempty,min=1"`
+	Language       *string     `json:"language" validate:"omitempty,min=2,max=10"`
+	PosterURL      *string     `json:"poster_url" validate:"omitempty,url"`
+	BackdropURL    *string     `json:"backdrop_url" validate:"omitempty,url"`
+	TrailerURL     *string     `json:"trailer_url" validate:"omitempty,url"`
+	ImdbID         *string     `json:"imdb_id"`
+	ContentRating  *string     `json:"content_rating"`
+	LicenseType    *string     `json:"license_type"`
+	LicenseURL     *string     `json:"license_url" validate:"omitempty,url"`
+	Status         *string     `json:"status" validate:"omitempty,oneof=active inactive pending_review"`
 	GenreIDs       []uuid.UUID `json:"genre_ids"`
 }
 
 // CreateShowRequest is the request body for creating a show.
 type CreateShowRequest struct {
-	Title        string    `json:"title" validate:"required,min=1,max=500"`
-	Overview     *string   `json:"overview"`
-	FirstAirDate *string   `json:"first_air_date"`
-	Language     string    `json:"language" validate:"required,min=2,max=10"`
-	PosterURL    *string   `json:"poster_url" validate:"omitempty,url"`
-	BackdropURL  *string   `json:"backdrop_url" validate:"omitempty,url"`
-	LicenseType  string    `json:"license_type" validate:"required"`
-	LicenseURL   *string   `json:"license_url" validate:"omitempty,url"`
+	Title        string      `json:"title" validate:"required,min=1,max=500"`
+	Overview     *string     `json:"overview"`
+	FirstAirDate *string     `json:"first_air_date"`
+	LastAirDate  *string     `json:"last_air_date"`
+	Language     string      `json:"language" validate:"required,min=2,max=10"`
+	PosterURL    *string     `json:"poster_url" validate:"omitempty,url"`
+	BackdropURL  *string     `json:"backdrop_url" validate:"omitempty,url"`
+	LicenseType  string      `json:"license_type" validate:"required"`
+	LicenseURL   *string     `json:"license_url" validate:"omitempty,url"`
 	GenreIDs     []uuid.UUID `json:"genre_ids"`
 }
 
@@ -132,12 +133,12 @@ type CreateEpisodeRequest struct {
 
 // CreateMagnetRequest is the request body for adding a magnet link.
 type CreateMagnetRequest struct {
-	ContentType   string `json:"content_type" validate:"required,oneof=movie episode"`
+	ContentType   string    `json:"content_type" validate:"required,oneof=movie episode"`
 	ContentID     uuid.UUID `json:"content_id" validate:"required"`
-	MagnetURI     string `json:"magnet_uri" validate:"required"`
-	InfoHash      string `json:"info_hash" validate:"required,min=32,max=64"`
-	Quality       string `json:"quality" validate:"required"`
-	Codec         *string `json:"codec"`
-	FileSizeBytes *int64 `json:"file_size_bytes" validate:"omitempty,min=0"`
-	Source        *string `json:"source"`
+	MagnetURI     string    `json:"magnet_uri" validate:"required"`
+	InfoHash      string    `json:"info_hash" validate:"required,min=32,max=64"`
+	Quality       string    `json:"quality" validate:"required"`
+	Codec         *string   `json:"codec"`
+	FileSizeBytes *int64    `json:"file_size_bytes" validate:"omitempty,min=0"`
+	Source        *string   `json:"source"`
 }

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -46,6 +45,9 @@ func (s *SearchService) Search(ctx context.Context, query dto.SearchQuery) ([]dt
 			Total int64                  `json:"total"`
 		}
 		if err := json.Unmarshal([]byte(cached), &res); err == nil {
+			if res.Items == nil {
+				res.Items = []dto.SearchResultItem{}
+			}
 			return res.Items, res.Total, nil
 		}
 	}
@@ -53,7 +55,7 @@ func (s *SearchService) Search(ctx context.Context, query dto.SearchQuery) ([]dt
 	offset := (query.Page - 1) * query.PerPage
 	limit := query.PerPage
 
-	var items []dto.SearchResultItem
+	items := make([]dto.SearchResultItem, 0)
 	var total int64
 
 	movieQuery := `
@@ -72,22 +74,22 @@ func (s *SearchService) Search(ctx context.Context, query dto.SearchQuery) ([]dt
 		SELECT id, 'show' as type, title, slug, overview, poster_url, language, avg_rating, view_count, first_air_date as release_date,
 			   ts_rank(to_tsvector('english', coalesce(title, '') || ' ' || coalesce(overview, '')), plainto_tsquery('english', $1)) as rank
 		FROM shows
-		WHERE status = 'active'
+		WHERE status IN ('ongoing', 'ended', 'cancelled')
 		  AND to_tsvector('english', coalesce(title, '') || ' ' || coalesce(overview, '')) @@ plainto_tsquery('english', $1)
 	`
 	showCountQuery := `
 		SELECT COUNT(id) FROM shows 
-		WHERE status = 'active' AND to_tsvector('english', coalesce(title, '') || ' ' || coalesce(overview, '')) @@ plainto_tsquery('english', $1)
+		WHERE status IN ('ongoing', 'ended', 'cancelled') AND to_tsvector('english', coalesce(title, '') || ' ' || coalesce(overview, '')) @@ plainto_tsquery('english', $1)
 	`
 
 	var sqlQuery string
 	var countQuery string
 
 	if query.Type == "movie" {
-		sqlQuery = movieQuery + " ORDER BY rank DESC LIMIT $2 OFFSET $3"
+		sqlQuery = movieQuery + " ORDER BY rank DESC, title ASC, id ASC LIMIT $2 OFFSET $3"
 		countQuery = movieCountQuery
 	} else if query.Type == "show" {
-		sqlQuery = showQuery + " ORDER BY rank DESC LIMIT $2 OFFSET $3"
+		sqlQuery = showQuery + " ORDER BY rank DESC, title ASC, id ASC LIMIT $2 OFFSET $3"
 		countQuery = showCountQuery
 	} else {
 		sqlQuery = fmt.Sprintf(`
@@ -96,7 +98,7 @@ func (s *SearchService) Search(ctx context.Context, query dto.SearchQuery) ([]dt
 				UNION ALL
 				%s
 			) as combined
-			ORDER BY rank DESC LIMIT $2 OFFSET $3
+			ORDER BY rank DESC, title ASC, type ASC, id ASC LIMIT $2 OFFSET $3
 		`, movieQuery, showQuery)
 		countQuery = fmt.Sprintf("SELECT (%s) + (%s)", movieCountQuery, showCountQuery)
 	}
@@ -125,9 +127,12 @@ func (s *SearchService) Search(ctx context.Context, query dto.SearchQuery) ([]dt
 		)
 		if err != nil {
 			s.log.Error().Err(err).Msg("failed to scan search result")
-			continue
+			return nil, 0, err
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
 
 	// Save to cache
@@ -150,11 +155,14 @@ func (s *SearchService) Suggest(ctx context.Context, query string) ([]dto.Sugges
 	if err == nil {
 		var items []dto.SuggestResultItem
 		if err := json.Unmarshal([]byte(cached), &items); err == nil {
+			if items == nil {
+				items = []dto.SuggestResultItem{}
+			}
 			return items, nil
 		}
 	}
 
-	var items []dto.SuggestResultItem
+	items := make([]dto.SuggestResultItem, 0)
 	sqlQuery := `
 		SELECT id, 'movie' as type, title, slug
 		FROM movies
@@ -162,7 +170,8 @@ func (s *SearchService) Suggest(ctx context.Context, query string) ([]dto.Sugges
 		UNION ALL
 		SELECT id, 'show' as type, title, slug
 		FROM shows
-		WHERE title ILIKE '%' || $1 || '%' AND status = 'active'
+		WHERE title ILIKE '%' || $1 || '%' AND status IN ('ongoing', 'ended', 'cancelled')
+		ORDER BY title ASC, type ASC, id ASC
 		LIMIT 5
 	`
 	rows, err := s.db.Query(ctx, sqlQuery, query)
@@ -177,9 +186,12 @@ func (s *SearchService) Suggest(ctx context.Context, query string) ([]dto.Sugges
 		err := rows.Scan(&item.ID, &item.Type, &item.Title, &item.Slug)
 		if err != nil {
 			s.log.Error().Err(err).Msg("failed to scan suggest result")
-			continue
+			return nil, err
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	cacheBytes, _ := json.Marshal(items)

@@ -2,8 +2,8 @@ package model
 
 import (
 	"encoding/json"
-	"time"
 	"github.com/google/uuid"
+	"time"
 )
 
 type UserProfile struct {
@@ -36,4 +36,9 @@ type WatchHistoryItem struct {
 	Duration    *float64        `json:"duration,omitempty"`
 	Metadata    json.RawMessage `json:"metadata"`
 	WatchedAt   time.Time       `json:"watched_at"`
+}
+
+type Snapshot[T any] struct {
+	Items    []T
+	Revision int64
 }

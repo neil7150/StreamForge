@@ -14,7 +14,6 @@ import { SettingsScreen } from '../screens/SettingsScreen'
 import { MovieDetailScreen } from '../screens/MovieDetailScreen'
 import { SeriesDetailScreen } from '../screens/SeriesDetailScreen'
 import { PlayerScreen } from '../screens/PlayerScreen'
-import { LoginScreen } from '../screens/LoginScreen'
 
 // Icons
 import { Home, Compass, Search, Library, Settings } from 'lucide-react-native'
@@ -110,14 +109,6 @@ export function RootNavigator() {
         options={{
           animation: 'fade',
           gestureEnabled: false
-        }}
-      />
-      <Stack.Screen
-        name="Login"
-        component={LoginScreen}
-        options={{
-          presentation: 'modal',
-          animation: 'slide_from_bottom'
         }}
       />
     </Stack.Navigator>

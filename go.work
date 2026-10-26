@@ -1,6 +1,9 @@
 go 1.26.0
 
+toolchain go1.27.3
+
 use (
+	./services/api
 	./pkg
 	./services/auth
 	./services/content

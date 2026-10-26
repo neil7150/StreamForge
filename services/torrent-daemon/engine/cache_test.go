@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -44,7 +45,7 @@ func cacheFixture(t *testing.T, budget int64, count int) (*boundedCache, []stora
 	t.Helper()
 	cache := newBoundedCache(t.TempDir(), budget)
 	info := &metainfo.Info{Name: "fixture.mp4", Length: int64(count * 8), PieceLength: 8, Pieces: make([]byte, count*20)}
-	store, err := cache.OpenTorrent(info, metainfo.Hash{})
+	store, err := cache.OpenTorrent(context.Background(), info, metainfo.Hash{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestCacheReservesWholeUnfinishedPieceAndFailsSafelyOnEvictionError(t *testi
 
 func TestCacheRejectsOversizePiecesAndOutOfBoundsWrites(t *testing.T) {
 	cache, pieces := cacheFixture(t, 8, 1)
-	if _, err := cache.OpenTorrent(&metainfo.Info{PieceLength: maxPieceBytes + 1}, metainfo.Hash{}); err == nil {
+	if _, err := cache.OpenTorrent(context.Background(), &metainfo.Info{PieceLength: maxPieceBytes + 1}, metainfo.Hash{}); err == nil {
 		t.Fatal("oversize piece accepted")
 	}
 	for _, offset := range []int64{-1, 8, 9} {
@@ -192,5 +193,20 @@ func TestCacheDetectsExternallyRemovedAndTruncatedPieces(t *testing.T) {
 	writeVerified(t, pieces[1], "abcdefgh")
 	if len(cache.takeEvicted()) != 2 || cache.reserved != 16 {
 		t.Fatal("recovery did not preserve completion notifications and bounds")
+	}
+}
+
+func TestCancelledStorageOpenDoesNotCreateFiles(t *testing.T) {
+	root := t.TempDir()
+	cache := newBoundedCache(root, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := cache.OpenTorrent(ctx, &metainfo.Info{PieceLength: 4}, metainfo.Hash{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("cancelled open created cache files: %v", err)
 	}
 }

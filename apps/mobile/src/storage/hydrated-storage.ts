@@ -5,7 +5,7 @@ export interface AsyncKeyStorage {
 }
 
 export function scopeLibraryKey(key: string, accountId: string | null): string {
-  return ['streamforge_watchlist', 'streamforge_history', 'streamforge_library_deletions'].includes(key)
+  return ['streamforge_watchlist', 'streamforge_history', 'streamforge_library_deletions', 'streamforge_library_v2'].includes(key)
     ? `streamforge.library.v1.${accountId === null ? 'guest' : `user-${encodeURIComponent(accountId)}`}.${key}`
     : key
 }

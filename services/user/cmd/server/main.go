@@ -12,25 +12,21 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"streamforge/services/user/internal/config"
-	"streamforge/services/user/internal/handler"
-	"streamforge/services/user/internal/repository"
-	"streamforge/services/user/internal/service"
 	"streamforge.local/pkg/auth"
 	"streamforge.local/pkg/database"
 	"streamforge.local/pkg/logger"
-	"streamforge.local/pkg/middleware"
+	userapp "streamforge/services/user/app"
+	"streamforge/services/user/internal/config"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	logger.InitLogger("development")
 	cfg := config.Load()
+	log.Logger = logger.New(cfg.LogLevel, cfg.AppEnv)
 
-	db, err := database.Connect(cfg.DatabaseURL)
+	db, err := database.Connect(context.Background(), database.DefaultConfig(cfg.DatabaseURL))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to connect to database")
 	}
@@ -38,7 +34,7 @@ func main() {
 
 	// Run migrations
 	if err := runMigrations(cfg.DatabaseURL); err != nil {
-		log.Warn().Err(err).Msg("migration warning")
+		log.Fatal().Err(err).Msg("database migration failed")
 	} else {
 		log.Info().Msg("database migrations applied")
 	}
@@ -52,28 +48,7 @@ func main() {
 
 	tokenBlacklist := auth.NewRedisTokenBlacklist(authRedis)
 
-	profileRepo := repository.NewProfileRepository(db)
-	syncRepo := repository.NewSyncRepository(db)
-
-	profileSvc := service.NewProfileService(profileRepo)
-	syncSvc := service.NewSyncService(syncRepo)
-
-	profileH := handler.NewProfileHandler(profileSvc)
-	syncH := handler.NewSyncHandler(syncSvc)
-
-	app := fiber.New(fiber.Config{
-		DisableStartupMessage: true,
-	})
-
-	app.Use(middleware.RequestLogger())
-	app.Use(middleware.Recover())
-	middleware.RegisterMetrics(app, "user")
-
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
-	})
-
-	handler.SetupRoutes(app, profileH, syncH, cfg.JWTSecret, tokenBlacklist)
+	app := userapp.New(db, cfg.JWTSecret, tokenBlacklist, log.Logger)
 
 	go func() {
 		if err := app.Listen(":" + cfg.Port); err != nil {
@@ -88,10 +63,8 @@ func main() {
 	log.Info().Msg("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
-	_ = ctx
-	
-	if err := app.Shutdown(); err != nil {
+
+	if err := app.ShutdownWithContext(ctx); err != nil {
 		log.Error().Err(err).Msg("Server shutdown error")
 	}
 	log.Info().Msg("Server stopped")
@@ -110,4 +83,3 @@ func runMigrations(databaseURL string) error {
 	}
 	return nil
 }
-

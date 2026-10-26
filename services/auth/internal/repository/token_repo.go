@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,6 +22,8 @@ const (
 type TokenRepository struct {
 	client *redis.Client
 }
+
+var ErrRefreshTokenNotFound = errors.New("refresh token not found or expired")
 
 // NewTokenRepository creates a new TokenRepository.
 func NewTokenRepository(client *redis.Client) *TokenRepository {
@@ -45,19 +48,23 @@ func (r *TokenRepository) StoreRefreshToken(ctx context.Context, userID uuid.UUI
 	return nil
 }
 
-// GetRefreshToken retrieves the user ID associated with a refresh token hash.
-func (r *TokenRepository) GetRefreshToken(ctx context.Context, tokenHash string) (uuid.UUID, error) {
-	val, err := r.client.Get(ctx, refreshTokenPrefix+tokenHash).Result()
+// ConsumeRefreshToken atomically removes a token and returns its owner. GETDEL
+// (Redis 6.2+) prevents concurrent requests from rotating one token twice.
+func (r *TokenRepository) ConsumeRefreshToken(ctx context.Context, tokenHash string) (uuid.UUID, error) {
+	val, err := r.client.GetDel(ctx, refreshTokenPrefix+tokenHash).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return uuid.Nil, fmt.Errorf("refresh token not found or expired")
+			return uuid.Nil, ErrRefreshTokenNotFound
 		}
-		return uuid.Nil, fmt.Errorf("get refresh token: %w", err)
+		return uuid.Nil, fmt.Errorf("consume refresh token: %w", err)
 	}
 
 	userID, err := uuid.Parse(val)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("parse user ID from token: %w", err)
+	}
+	if err := r.client.SRem(ctx, userTokensPrefix+userID.String(), tokenHash).Err(); err != nil {
+		return uuid.Nil, fmt.Errorf("remove consumed token from account index: %w", err)
 	}
 	return userID, nil
 }

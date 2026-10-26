@@ -1,5 +1,10 @@
 # StreamForge mobile architecture and implementation roadmap
 
+26 October 2026 scope update: the first release is device-local without accounts
+or an owned backend. [android-local-first.md](android-local-first.md) records the
+current implementation and supersedes account/backend prerequisites in the older
+proposal below. Native playback, local storage and the ownership rules still apply.
+
 Companion to the [82-issue audit](C:/Users/neilr/Desktop/Torrent/docs/streamforge-mobile-audit.md). This is a proposed design, not implemented application code.
 
 ## Recommended architecture

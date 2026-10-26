@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +17,7 @@ import (
 )
 
 const (
-	cacheTTLShow   = 1 * time.Hour
+	cacheTTLShow = 1 * time.Hour
 )
 
 const (
@@ -55,7 +54,7 @@ func NewShowService(
 
 func (s *ShowService) ListShows(ctx context.Context, page, perPage int, genre, sortBy, sortOrder string) ([]model.Show, int64, error) {
 	cacheKey := fmt.Sprintf("shows:list:%d:%d:%s:%s:%s", page, perPage, genre, sortBy, sortOrder)
-	
+
 	if cached, err := s.getShowsListFromCache(ctx, cacheKey); err == nil {
 		return cached.Shows, cached.Total, nil
 	}
@@ -82,7 +81,7 @@ func (s *ShowService) ListShows(ctx context.Context, page, perPage int, genre, s
 
 func (s *ShowService) GetShow(ctx context.Context, slug string) (model.Show, error) {
 	cacheKey := cacheKeyShowBySlug + slug
-	if cached, err := s.getShowFromCache(ctx, cacheKey); err == nil {
+	if cached, err := s.getShowFromCache(ctx, cacheKey); err == nil && publicShow(cached) {
 		s.log.Debug().Str("slug", slug).Msg("show cache hit")
 		s.incrementViewCountAsync(cached.ID)
 		return cached, nil
@@ -98,7 +97,7 @@ func (s *ShowService) GetShow(ctx context.Context, slug string) (model.Show, err
 	}
 
 	if err := s.enrichShow(ctx, &show); err != nil {
-		s.log.Warn().Err(err).Msg("failed to enrich show")
+		return show, err
 	}
 
 	s.incrementViewCountAsync(show.ID)
@@ -190,6 +189,16 @@ func (s *ShowService) DeleteShow(ctx context.Context, id uuid.UUID) error {
 }
 
 func (s *ShowService) GetSeasons(ctx context.Context, showID uuid.UUID) ([]model.Season, error) {
+	show, err := s.showRepo.GetByID(ctx, showID)
+	if errors.Is(err, repository.ErrShowNotFound) || errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !publicShow(show) {
+		return nil, ErrNotFound
+	}
 	seasons, err := s.showRepo.GetSeasons(ctx, showID)
 	if err != nil {
 		return nil, err
@@ -197,9 +206,10 @@ func (s *ShowService) GetSeasons(ctx context.Context, showID uuid.UUID) ([]model
 
 	for i := range seasons {
 		episodes, err := s.showRepo.GetEpisodes(ctx, seasons[i].ID)
-		if err == nil {
-			seasons[i].Episodes = episodes
+		if err != nil {
+			return nil, err
 		}
+		seasons[i].Episodes = episodes
 	}
 
 	return seasons, nil
@@ -215,6 +225,7 @@ func (s *ShowService) CreateSeason(ctx context.Context, season model.Season) (mo
 		s.rdb.Del(ctx, cacheKeyShowBySlug+show.Slug)
 		s.rdb.Del(ctx, cacheKeyShowByID+show.ID.String())
 	}
+	s.invalidateShowsListCache(ctx)
 
 	return created, nil
 }
@@ -224,10 +235,21 @@ func (s *ShowService) CreateEpisode(ctx context.Context, episode model.Episode) 
 	if err != nil {
 		return created, err
 	}
+	if show, err := s.showRepo.GetByID(ctx, created.ShowID); err == nil {
+		s.rdb.Del(ctx, cacheKeyShowBySlug+show.Slug, cacheKeyShowByID+show.ID.String())
+	}
+	s.invalidateShowsListCache(ctx)
 	return created, nil
 }
 
 func (s *ShowService) GetEpisodeMagnets(ctx context.Context, episodeID uuid.UUID) ([]model.MagnetLink, error) {
+	_, err := s.showRepo.PublicEpisodeShowID(ctx, episodeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
 	magnets, err := s.magnetRepo.GetByContent(ctx, "episode", episodeID)
 	if err != nil {
 		s.log.Error().Err(err).Str("episode_id", episodeID.String()).Msg("failed to get episode magnets")
@@ -305,12 +327,19 @@ func (s *ShowService) enrichShow(ctx context.Context, show *model.Show) error {
 	}
 
 	for i := range seasons {
-		episodes, _ := s.showRepo.GetEpisodes(ctx, seasons[i].ID)
+		episodes, err := s.showRepo.GetEpisodes(ctx, seasons[i].ID)
+		if err != nil {
+			return err
+		}
 		seasons[i].Episodes = episodes
 	}
 	show.Seasons = seasons
 
 	return nil
+}
+
+func publicShow(show model.Show) bool {
+	return show.Status == "ongoing" || show.Status == "ended" || show.Status == "cancelled"
 }
 
 func (s *ShowService) cacheShow(ctx context.Context, key string, show model.Show, ttl time.Duration) {

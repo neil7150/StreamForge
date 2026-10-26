@@ -4,9 +4,8 @@ import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native'
 import * as Linking from 'expo-linking'
-import { setTorrentAPI, useAuthStore, extractInfoHash, api } from '@streamforge/core'
+import { setTorrentAPI, extractInfoHash, api } from '@streamforge/core'
 import { mobileTorrentAPI } from './native/torrent-engine'
-import { resolveMobileBackend } from './config/backend'
 import { RootNavigator } from './navigation/RootNavigator'
 import type { RootStackParamList } from './navigation/types'
 import { colors } from './theme/colors'
@@ -16,8 +15,8 @@ export const navigationRef = createNavigationContainerRef<RootStackParamList>()
 
 const prefix = Linking.createURL('/')
 
-// Expo statically replaces this exact property access in the JS bundle.
-api.setBaseURL(resolveMobileBackend(process.env.EXPO_PUBLIC_API_BASE_URL))
+// This mobile release has no account/catalog backend, even if an old env exists.
+api.setBaseURL('')
 
 const linkingConfig = {
   prefixes: [prefix, 'streamforge://'],
@@ -34,8 +33,7 @@ const linkingConfig = {
       },
       MovieDetail: 'movie/:slug',
       SeriesDetail: 'series/:slug',
-      Player: 'player',
-      Login: 'login'
+      Player: 'player'
     }
   }
 }

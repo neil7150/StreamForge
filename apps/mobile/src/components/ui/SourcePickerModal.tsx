@@ -18,6 +18,7 @@ interface SourcePickerModalProps {
   onSelectSource: (source: TorrentSearchResult) => void
   sources: TorrentSearchResult[]
   isLoading: boolean
+  error?: string
   title: string
 }
 
@@ -27,7 +28,8 @@ export const SourcePickerModal: React.FC<SourcePickerModalProps> = ({
   onSelectSource,
   sources,
   isLoading,
-  title
+  title,
+  error
 }) => {
   return (
     <Modal
@@ -55,11 +57,11 @@ export const SourcePickerModal: React.FC<SourcePickerModalProps> = ({
           {isLoading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.loadingText}>Scraping torrent providers...</Text>
+              <Text style={styles.loadingText}>Finding sources...</Text>
             </View>
           ) : sources.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No torrent sources found.</Text>
+              <Text style={styles.emptyText}>{error || 'No torrent sources found.'}</Text>
             </View>
           ) : (
             <FlatList

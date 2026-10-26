@@ -26,6 +26,7 @@ func (r *blockingReader) Seek(offset int64, _ int) (int64, error) { return offse
 func (r *blockingReader) Close() error                            { r.closed.Add(1); return nil }
 func (r *blockingReader) SetReadahead(int64)                      {}
 func (r *blockingReader) SetReadaheadFunc(torrent.ReadaheadFunc)  {}
+func (r *blockingReader) SetContext(context.Context)              {}
 func (r *blockingReader) SetResponsive()                          {}
 
 func TestCloseCancelsBlockedReadAndReleasesExactlyOnce(t *testing.T) {

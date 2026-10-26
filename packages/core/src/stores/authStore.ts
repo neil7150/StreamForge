@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api } from '../clients/api'
 import { getStorageAdapter } from './storage-adapter'
 import { useUserDataStore } from './userDataStore'
+import { accountsEnabled, setAccountsEnabled } from './account-features'
 
 export interface AuthUser {
   id: string
@@ -44,8 +45,9 @@ function saveSession(accessToken: string, refreshToken: string, user: AuthUser) 
 }
 
 function syncUserData(expected: number) {
+  if (!accountsEnabled()) return
   void import('./userDataStore').then(({ useUserDataStore }) => {
-    if (generation !== expected) return
+    if (!accountsEnabled() || generation !== expected) return
     useUserDataStore.getState()._loadFromStorage()
     void useUserDataStore.getState().syncFromCloud()
   })
@@ -54,6 +56,7 @@ function syncUserData(expected: number) {
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null, isAuthenticated: false, isLoading: false, error: null,
   login: async (email, password) => {
+    if (!accountsEnabled()) { set({ error: 'Accounts are not available in this build', isLoading: false }); return }
     const expected = ++generation
     set({ isLoading: true, error: null })
     try {
@@ -66,6 +69,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
   register: async (email, password) => {
+    if (!accountsEnabled()) { set({ error: 'Accounts are not available in this build', isLoading: false }); return }
     const expected = ++generation
     set({ isLoading: true, error: null })
     try {
@@ -78,20 +82,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
   logout: async () => {
-    const sync = useUserDataStore.getState().syncToCloud()
     const expected = ++generation
     const storage = getStorageAdapter()
     const refreshToken = storage.getItem('streamforge_refresh_token')
-    const revoke = refreshToken ? api.logout(refreshToken).catch(() => {}) : Promise.resolve()
+    const revoke = accountsEnabled() && refreshToken ? api.logout(refreshToken).catch(() => {}) : Promise.resolve()
     const credentialKeys = ['streamforge_access_token', 'streamforge_refresh_token', 'streamforge_user']
     if (storage.removeItems) storage.removeItems(credentialKeys)
     else for (const key of credentialKeys) storage.removeItem(key)
     api.setToken(null)
     set({ user: null, isAuthenticated: false, isLoading: false, error: null })
     if (expected === generation) useUserDataStore.getState()._loadFromStorage()
-    await Promise.allSettled([sync, revoke])
+    // Pending local changes remain account-scoped for the next sign-in. A logout
+    // must not race an asynchronous upload into a different account or revoke it.
+    await revoke
   },
   refreshAuth: () => {
+    if (!accountsEnabled()) return Promise.resolve(false)
     const expected = generation
     if (refreshFlight?.generation === expected) return refreshFlight.promise
     const storage = getStorageAdapter()
@@ -102,7 +108,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const response = await api.refresh(refreshToken)
         if (expected !== generation) return false
         const { access_token, refresh_token, user } = response.data
-        if (!validUser(user) || user.id !== get().user?.id) throw new Error('Account changed during refresh')
+        if (!access_token || !refresh_token || !validUser(user) || user.id !== get().user?.id) throw new Error('Invalid refreshed account session')
         saveSession(access_token, refresh_token, user)
         api.setToken(access_token)
         set({ user, isAuthenticated: true })
@@ -118,6 +124,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return promise
   },
   loadSession: () => {
+    if (!accountsEnabled()) return
     const expected = ++generation
     const storage = getStorageAdapter()
     const accessToken = storage.getItem('streamforge_access_token')
@@ -128,13 +135,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!validUser(user)) throw new Error('Invalid saved account')
       api.setToken(accessToken)
       set({ user, isAuthenticated: true })
-      syncUserData(expected)
-      void get().refreshAuth()
+      // Local account data is available immediately; cloud reads wait for renewal.
+      void get().refreshAuth().then(() => { if (expected === generation) syncUserData(expected) })
     } catch {
       void get().logout()
     }
   },
   setSession: (accessToken, refreshToken, user) => {
+    if (!accountsEnabled()) throw new Error('Accounts are not available in this build')
     if (!accessToken || !refreshToken || !validUser(user)) throw new Error('Invalid account session')
     const expected = ++generation
     saveSession(accessToken, refreshToken, user)
@@ -143,6 +151,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     syncUserData(expected)
   },
   loginWithOAuth: async provider => {
+    if (!accountsEnabled()) { set({ error: 'Accounts are not available in this build', isLoading: false }); return }
     const expected = generation
     set({ isLoading: true, error: null })
     try {
@@ -158,3 +167,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
   clearError: () => set({ error: null })
 }))
+
+/** Disable account work without deleting or exposing an older account's data. */
+export function disableAccountsForLocalUse() {
+  setAccountsEnabled(false)
+  generation++
+  api.setToken(null)
+  useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false, error: null })
+}
+
+api.configureAuthRefresh(() => useAuthStore.getState().refreshAuth(), getAuthGeneration)

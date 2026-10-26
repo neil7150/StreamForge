@@ -7,6 +7,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Keep native runtime security patches reproducible without changing the global Go installation.
+$env:GOTOOLCHAIN = 'go1.27.3'
 $daemonDirectory = $PSScriptRoot
 $repositoryRoot = Resolve-Path (Join-Path $daemonDirectory '..\..')
 $outputDirectory = Join-Path $repositoryRoot 'apps\mobile\modules\streamforge-torrent-daemon\android\libs'
@@ -50,7 +52,10 @@ Push-Location $daemonDirectory
 try {
   $bindingArguments = @('bind', "-target=$Target", "-androidapi=$AndroidApi", '-o', $daemonAar)
   # NDK r27 needs both flags for LOAD and RELRO alignment on 16 KiB devices.
-  $linkerFlags = '-extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384'
+  # Pion transport's pinned anet Android interface workaround uses private Go
+  # zone-cache symbols. Its documented Go 1.23+ build flag is required; keep the
+  # Go toolchain pinned and verify Android interface behavior on the test phone.
+  $linkerFlags = '-checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384'
   if ($StripSymbols) { $linkerFlags = "-s -w $linkerFlags" }
   $bindingArguments += "-ldflags=$linkerFlags"
   $bindingArguments += './mobile'

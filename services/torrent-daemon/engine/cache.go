@@ -2,6 +2,7 @@ package engine
 
 import (
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +57,10 @@ func newBoundedCache(directory string, limit int64) *boundedCache {
 		windows: make(map[*cacheWindow]struct{}), evicted: make(map[int]struct{}), changed: make(chan struct{}, 1)}
 }
 
-func (c *boundedCache) OpenTorrent(info *metainfo.Info, hash metainfo.Hash) (storage.TorrentImpl, error) {
+func (c *boundedCache) OpenTorrent(ctx context.Context, info *metainfo.Info, hash metainfo.Hash) (storage.TorrentImpl, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.TorrentImpl{}, err
+	}
 	if info.PieceLength <= 0 || info.PieceLength > min(maxPieceBytes, c.limit) {
 		return storage.TorrentImpl{}, errors.New("source piece size exceeds the mobile cache allowance; choose another source")
 	}

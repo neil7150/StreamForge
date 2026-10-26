@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { HydratedStorage, scopeLibraryKey } from '../src/storage/hydrated-storage.ts'
 
 test('account libraries and guest history have distinct persistent keys', () => {
-  const key = 'streamforge_history'
+  const key = 'streamforge_library_v2'
   assert.notEqual(scopeLibraryKey(key, 'A'), scopeLibraryKey(key, 'B'))
   assert.notEqual(scopeLibraryKey(key, null), scopeLibraryKey(key, 'guest'))
   assert.equal(scopeLibraryKey('streamforge_access_token', 'A'), 'streamforge_access_token')

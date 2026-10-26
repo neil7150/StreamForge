@@ -15,7 +15,8 @@ import type { RootStackParamList } from '../navigation/types'
 import { SourcePickerModal } from '../components/ui/SourcePickerModal'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { api, tvmazeClient } from '@streamforge/core/clients'
+import { tvmazeClient } from '@streamforge/core/clients'
+import { tvmazeSeriesId } from '../data/mobile-catalog'
 import { searchEpisodeTorrents } from '@streamforge/core/search'
 import { rankSources } from '@streamforge/core/policies'
 import { usePlaybackSettingsStore, useUserDataStore } from '@streamforge/core/stores'
@@ -23,22 +24,28 @@ import { extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult, EpisodeSummary, SeasonSummary } from '@streamforge/core/types'
 import { RequestGate } from '../data/request-gate'
 
+type DisplayEpisode = Omit<EpisodeSummary, 'id' | 'seasonId'> & { id: string | number; seasonId: string | number }
+
 type Props = NativeStackScreenProps<RootStackParamList, 'SeriesDetail'>
 
 export const SeriesDetailScreen = ({ navigation, route }: Props) => {
   const insets = useSafeAreaInsets()
   const { slug, id } = route.params
+  const seriesId = tvmazeSeriesId(id, slug)
   const [show, setShow] = useState<any>(null)
   const [seasons, setSeasons] = useState<SeasonSummary[]>([])
   const [selectedSeason, setSelectedSeason] = useState<number>(1)
-  const [episodes, setEpisodes] = useState<EpisodeSummary[]>([])
+  const [episodes, setEpisodes] = useState<DisplayEpisode[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false)
+  const [episodeError, setEpisodeError] = useState<string | null>(null)
+  const [episodeRetry, setEpisodeRetry] = useState(0)
 
   // Episode torrent picker
   const [modalVisible, setModalVisible] = useState(false)
-  const [selectedEpisode, setSelectedEpisode] = useState<EpisodeSummary | null>(null)
+  const [selectedEpisode, setSelectedEpisode] = useState<DisplayEpisode | null>(null)
   const [episodeSources, setEpisodeSources] = useState<TorrentSearchResult[]>([])
+  const [sourceError, setSourceError] = useState<string | undefined>()
   const [isSearchingEpisode, setIsSearchingEpisode] = useState(false)
   const sourceRequests = useRef(new RequestGate())
   const detailsRequests = useRef(new RequestGate())
@@ -69,10 +76,10 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
     setShow(null)
     setSeasons([])
     try {
-      if (typeof id === 'number') {
+      if (seriesId !== null) {
         const [showDetails, seasonList] = await Promise.all([
-          tvmazeClient.getSeries(id),
-          tvmazeClient.getSeasons(id)
+          tvmazeClient.getSeries(seriesId),
+          tvmazeClient.getSeasons(seriesId)
         ])
         if (!request.isCurrent()) return
         setShow(showDetails)
@@ -81,22 +88,14 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
           setSelectedSeason(seasonList[0].number)
         }
       } else {
-        const res = await api.getShowBySlug(slug)
-        if (!request.isCurrent()) return
-        if (res?.data) {
-          setShow(res.data)
-          if (res.data.seasons?.length) {
-            setSeasons(res.data.seasons)
-            setSelectedSeason(res.data.seasons[0].season_number || 1)
-          }
-        }
+        setLoadError('This saved series uses an older catalog. Find it again using Search.')
       }
     } catch (err) {
       if (request.isCurrent()) setLoadError('Could not load this series. Check your connection and retry.')
     } finally {
       if (request.isCurrent()) setIsLoading(false)
     }
-  }, [id, slug])
+  }, [seriesId, slug])
 
   useEffect(() => {
     loadShow()
@@ -107,32 +106,26 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
   useEffect(() => {
     let active = true
     setEpisodes([])
+    setEpisodeError(null)
     setIsLoadingEpisodes(false)
     if (!show) return
     const seasonObj = seasons.find((s: any) => (s.number ?? s.season_number) === selectedSeason)
     if (!seasonObj) return
 
     setIsLoadingEpisodes(true)
-    if (typeof id === 'number') {
+    if (seriesId !== null) {
       tvmazeClient.getSeasonEpisodes(seasonObj.id)
         .then((eps: EpisodeSummary[]) => { if (active) setEpisodes(eps) })
-        .catch(() => { if (active) setEpisodes([]) })
+        .catch(() => { if (active) { setEpisodes([]); setEpisodeError('Episodes could not be loaded. Tap to retry.') } })
         .finally(() => { if (active) setIsLoadingEpisodes(false) })
-    } else {
-      // From backend content service
-      if ((seasonObj as any).episodes) {
-        setEpisodes((seasonObj as any).episodes)
-        setIsLoadingEpisodes(false)
-      } else {
-        setIsLoadingEpisodes(false)
-      }
     }
     return () => { active = false }
-  }, [show, selectedSeason, seasons, id])
+  }, [show, selectedSeason, seasons, seriesId, episodeRetry])
 
-  const handlePlayEpisode = async (episode: EpisodeSummary) => {
+  const handlePlayEpisode = async (episode: DisplayEpisode) => {
     const request = sourceRequests.current.begin()
     setSelectedEpisode(episode)
+    setSourceError(undefined)
     setEpisodeSources([])
     setModalVisible(true)
     setIsSearchingEpisode(true)
@@ -141,19 +134,21 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
     const sNum = episode.seasonNumber ?? (episode as any).season_number ?? selectedSeason
 
     try {
-      const res = await searchEpisodeTorrents({
-        seriesTitle: show.title,
-        seasonNumber: sNum,
-        episodeNumber: epNum,
-        episodeTitle: episode.title,
-        imdbId: show.imdb_id || show.imdbId
+      if (episode.episodeNumber === null || episode.episodeNumber <= 0) throw new Error('Episode has no searchable number')
+      const response = await searchEpisodeTorrents({
+          seriesTitle: show.title,
+          seasonNumber: sNum,
+          episodeNumber: epNum,
+          episodeTitle: episode.title,
+          imdbId: show.imdb_id || show.imdbId
       })
-      if (request.isCurrent() && res.results?.length) {
-        const ranked = rankSources(res.results, playbackSettings)
+      const results = response.results
+      if (request.isCurrent() && results.length) {
+        const ranked = rankSources(results, playbackSettings)
         setEpisodeSources(ranked)
       }
     } catch {
-      if (request.isCurrent()) setEpisodeSources([])
+      if (request.isCurrent()) { setEpisodeSources([]); setSourceError('Could not load sources. Check your connection and select the episode to retry.') }
     } finally {
       if (request.isCurrent()) setIsSearchingEpisode(false)
     }
@@ -301,7 +296,7 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
           <Text style={styles.sectionHeader}>Episodes</Text>
         </View>
         </>}
-        ListEmptyComponent={isLoadingEpisodes ? <ActivityIndicator color={colors.primary} /> : <Text style={styles.emptyText}>No episode list available.</Text>}
+        ListEmptyComponent={isLoadingEpisodes ? <ActivityIndicator color={colors.primary} /> : episodeError ? <TouchableOpacity onPress={() => setEpisodeRetry(value => value + 1)} style={{ padding: 16 }}><Text style={{ color: colors.primary }}>{episodeError}</Text></TouchableOpacity> : <Text style={styles.emptyText}>No episode list available.</Text>}
         renderItem={({ item }: { item: any }) => <View style={styles.episodesSection}>
               <TouchableOpacity
                 style={styles.episodeCard}
@@ -335,6 +330,7 @@ export const SeriesDetailScreen = ({ navigation, route }: Props) => {
       />
       {/* Episode Torrent Sources Modal */}
       <SourcePickerModal
+        error={sourceError}
         visible={modalVisible}
         onClose={() => { sourceRequests.current.cancel(); setIsSearchingEpisode(false); setModalVisible(false) }}
         onSelectSource={handleSelectSource}

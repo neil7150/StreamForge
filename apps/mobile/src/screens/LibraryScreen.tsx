@@ -37,11 +37,12 @@ export const LibraryScreen = ({ navigation }: Props) => {
   const removeFromWatchlist = useUserDataStore((s) => s.removeFromWatchlist)
   const removeFromHistory = useUserDataStore((s) => s.removeFromHistory)
   const clearHistory = useUserDataStore((s) => s.clearHistory)
+  const syncError = useUserDataStore(s => s.syncError)
 
   const handleClearHistory = () => {
     Alert.alert(
       'Clear Watch History',
-      'Are you sure you want to clear your entire watch history?',
+      'Are you sure you want to clear the watch history shown on this device?',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear', style: 'destructive', onPress: clearHistory }
@@ -51,6 +52,7 @@ export const LibraryScreen = ({ navigation }: Props) => {
 
   return (
     <View style={styles.container}>
+      {syncError ? <Text style={{ color: colors.error, padding: 16, paddingTop: insets.top + 16 }}>{syncError}</Text> : null}
       {/* Tab Switcher */}
       <View style={[styles.tabContainer, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity

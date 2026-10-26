@@ -1,6 +1,24 @@
 # StreamForge Android development
 
+Current release scope: device-local, no accounts and no owned backend. Catalog
+metadata is fetched directly from the existing public providers; torrent playback
+and library/preferences are handled on the phone. Internet is still required for
+online metadata/source discovery and peers. See
+[current architecture and pending tests](../../docs/android-local-first.md).
+
 ## Current build restriction
+
+An authorized standalone phone-test build uses:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps/mobile/scripts/run-android.ps1 -AssembleOnly -StandaloneTest -AuthorizeApkBuild
+```
+
+Run from the repository root, only after explicit build permission. This variant
+bundles production JavaScript, is non-debuggable, uses ARM64/shrinking/stripped
+native symbols, and is signed with the local Android debug certificate under
+`com.streamforge.app.test`. It is an internal test APK, not a delivery signing
+identity, and runs without Metro. It does not install or publish the app.
 
 APK generation requires explicit user permission. Commands in the Run and Release
 sections require that permission. The Android runner also requires the
@@ -13,7 +31,8 @@ Safe source validation from the repository root:
 npm run validate:mobile
 ```
 
-This runs TypeScript checks, JavaScript/Go tests and script syntax checks. It
+This runs TypeScript checks, JavaScript tests, all four backend service tests,
+shared Go packages, torrent daemon tests and script syntax checks. It
 does not run Expo prebuild, Gradle assembly, gomobile binding or APK generation.
 
 The updated source requires native protocol 2, AsyncStorage and SecureStore.
@@ -38,10 +57,15 @@ Native project configuration can be regenerated with Expo prebuild without
 creating an APK. Prebuild may replace the ignored `android/` directory, including
 old generated outputs; keep durable changes in tracked configuration plugins.
 
-Copy `.env.example` inside this directory to `.env` and set
-`EXPO_PUBLIC_API_BASE_URL` to a reachable HTTPS API gateway. This value is public
-configuration; do not put credentials in it. Missing configuration produces an
-unavailable catalog instead of silently using sample data or device localhost.
+No backend `.env` or `EXPO_PUBLIC_API_BASE_URL` is required. Mobile ignores an old
+backend URL and does not restore account credentials or run cloud synchronization.
+Account/backend source remains in the repository for a future explicitly scoped
+feature; it is not required for this device-local release.
+
+The separate `npm run validate:backend:integration` command now verifies the
+auth/sync flow against disposable PostgreSQL and local HTTPS with a test-only
+Redis emulator. Setup and evidence are in `../../docs/backend-integration-tests.md`.
+It does not build or install the Android app.
 
 This app uses a local Expo module to start the Go torrent daemon inside an
 Android development build. Expo Go cannot load that native module.
@@ -119,3 +143,27 @@ keep diagnostic symbols available while validating the native integration.
 
 See `docs/android-implementation-status.md` from the repository root for current
 limitations and the physical-device test checklist.
+
+Catalog and search now have local PostgreSQL/HTTPS integration coverage through
+the shared API client. Catalog episodes prefer attached sources before external
+search, with validation, cancellation guards and visible load errors. The current
+source suite passes 47 JavaScript tests plus TypeScript/Go checks. See
+[the implementation checkpoint](../../docs/android-implementation-status.md) for
+remaining staging and phone tests; APK generation still needs explicit permission.
+
+Library synchronization now persists an account-scoped baseline to distinguish
+remote deletions from pending offline edits. The Library tab refreshes on focus
+and supports pull-to-refresh; unchanged collections do not upload. See the
+[sync protocol](../../docs/library-sync-protocol.md) for conflict and upgrade rules.
+
+Backend deployment preparation and the remaining staging prerequisites are tracked
+in [the deployment procedure](../../docs/backend-deployment.md). Use
+`npm run validate:deployment` for Compose/source checks; it does not produce an APK.
+Actual container, public HTTPS and Android validation remain separate gates.
+
+The [pre-APK checkpoint](../../docs/android-pre-apk-readiness.md) records the final
+patched ARM64 library, production JS export, permission/signing guards and external
+backend/signing gates. Run `npm run check:apk-readiness` for source/artifact
+inspection. A ready source report never authorizes an APK build. The
+[phone checklist](../../docs/android-phone-test-checklist.md) starts only after an
+explicitly approved build; USB is optional for initial functional testing.

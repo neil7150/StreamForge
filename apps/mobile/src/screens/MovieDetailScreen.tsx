@@ -15,7 +15,7 @@ import type { RootStackParamList } from '../navigation/types'
 import { SourcePickerModal } from '../components/ui/SourcePickerModal'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { api } from '@streamforge/core/clients'
+import { mobileCatalog as catalog } from '../data/mobile-catalog'
 import { useUserDataStore, usePlaybackSettingsStore } from '@streamforge/core/stores'
 import { rankSources } from '@streamforge/core/policies'
 import { searchMovieTorrents } from '@streamforge/core/search'
@@ -52,27 +52,10 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
     setIsLoading(true)
     setLoadError(null)
     try {
-      const res = await api.getMovieBySlug(slug, request.signal)
+      const res = await catalog.getMovieBySlug(slug, request.signal)
       if (!request.isCurrent()) return
       if (res?.data) {
         setMovie(res.data)
-        // If movie has magnets attached from backend catalog
-        const magnetList = res.data.magnet_links || res.data.magnets
-        if (magnetList?.length) {
-          const mapped: TorrentSearchResult[] = magnetList.map((m: any) => ({
-            id: m.id || m.info_hash,
-            name: `${res.data.title}${m.quality ? ` [${m.quality}]` : ''}`,
-            magnetURI: m.magnet_uri,
-            seeders: m.seed_count ?? 0,
-            leechers: m.peer_count ?? 0,
-            size: m.file_size_bytes ? `${(m.file_size_bytes / 1024 / 1024 / 1024).toFixed(1)} GB` : 'Unknown',
-            sizeBytes: m.file_size_bytes || 0,
-            category: 'Movies',
-            added: new Date().toISOString(),
-            provider: 'StreamForge' as any
-          }))
-          setSources(mapped)
-        }
       } else {
         setMovie(null)
         setLoadError('Movie not found.')

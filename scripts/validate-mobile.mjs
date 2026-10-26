@@ -13,8 +13,17 @@ const checks = [
   ['Shared policy tests', process.execPath, ['--import', './scripts/register-typescript.mjs', '--test', 'packages/core/tests/core-policies.test.ts']],
   ['Mobile logic tests', process.execPath, ['--import', './scripts/register-typescript.mjs', '--test', ...mobileTests.map(name => `apps/mobile/tests/${name}`)]],
   ['Release plugin syntax', process.execPath, ['--check', 'apps/mobile/plugins/with-android-release.js']],
+  ['Standalone test plugin syntax', process.execPath, ['--check', 'apps/mobile/plugins/with-android-test-build.js']],
   ['Network plugin syntax', process.execPath, ['--check', 'apps/mobile/plugins/with-localhost-cleartext.js']],
-  ['Go daemon tests', 'go', ['test', './...'], 'services/torrent-daemon']
+  ['Deployment validator syntax', process.execPath, ['--check', 'scripts/validate-deployment.mjs']],
+  ['Staging probe syntax', process.execPath, ['--check', 'scripts/check-staging.mjs']],
+  ['APK readiness checker syntax', process.execPath, ['--check', 'scripts/check-apk-readiness.mjs']],
+  ['Real-container client syntax', process.execPath, ['--check', 'scripts/container-client-check.mjs']],
+  ['Library device client syntax', process.execPath, ['--check', 'scripts/library-device-check.mjs']],
+  ['Catalog HTTPS client syntax', process.execPath, ['--check', 'scripts/catalog-client-check.mjs']],
+  ['Backend HTTPS client syntax', process.execPath, ['--check', 'scripts/backend-client-check.mjs']],
+  ['Go daemon tests', 'go', ['test', '-mod=readonly', '-timeout=90s', './...'], 'services/torrent-daemon'],
+  ['Backend service tests', 'go', ['test', '-mod=readonly', '-timeout=90s', './services/api/...', './services/auth/...', './services/content/...', './services/search/...', './services/user/...', './pkg/...']]
 ]
 if (process.platform === 'win32') checks.push(['Android script syntax', 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/check-android-script-syntax.ps1']])
 

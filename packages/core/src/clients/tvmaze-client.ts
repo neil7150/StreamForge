@@ -298,16 +298,22 @@ export class TVMazeClient {
   }
 
   async getSeasons(seriesId: number): Promise<SeasonSummary[]> {
-    return this.cached(`seasons:${seriesId}`, CATALOG_CACHE_TTL_MS, async () => {
+    const seasons = await this.cached(`seasons:${seriesId}`, CATALOG_CACHE_TTL_MS, async () => {
       const payload = await this.request(`/shows/${seriesId}/seasons`)
       if (!Array.isArray(payload)) throw new TVMazeClientError('TVmaze returned an invalid season response')
       const seasons = normalizeYearNumberedSeasons(payload.flatMap((value) => {
         const normalized = normalizeSeason(value, seriesId)
         return normalized ? [normalized] : []
       }))
-      for (const season of seasons) this.normalizedSeasonNumberById.set(season.id, season.number)
       return seasons
     })
+    // Refresh mappings even on a cached season-list read, with a bounded index.
+    for (const season of seasons) {
+      this.normalizedSeasonNumberById.delete(season.id)
+      this.normalizedSeasonNumberById.set(season.id, season.number)
+    }
+    while (this.normalizedSeasonNumberById.size > 2048) this.normalizedSeasonNumberById.delete(this.normalizedSeasonNumberById.keys().next().value!)
+    return seasons
   }
 
   async getSeasonEpisodes(seasonId: number): Promise<EpisodeSummary[]> {
@@ -331,6 +337,9 @@ export class TVMazeClient {
 
     const pending = loader()
       .then((value) => {
+        for (const [entryKey, entry] of this.cache) if (entry.expiresAt <= this.now()) this.cache.delete(entryKey)
+        this.cache.delete(key)
+        while (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
         this.cache.set(key, { value, expiresAt: this.now() + ttlMs })
         return value
       })

@@ -1,5 +1,230 @@
 # Android implementation checkpoint — 20 October 2026
 
+## Authorized test build — 26 October 2026
+
+The user explicitly authorized a local test APK, with GitHub updated first.
+Prepared a separate `standaloneTest` variant: bundled production JavaScript,
+non-debuggable, optimized ARM64, debug test certificate and `.test` app ID suffix.
+Delivery release signing remains protected; its task guard now distinguishes app
+release packaging from release resources in dependent libraries. No publishing or
+phone installation is authorized by this local build request. Build results will
+be recorded after GitHub push and APK verification.
+
+## Device-local scope — 26 October 2026 (current)
+
+User requested native phone use without accounts; accounts may be added later.
+Mobile now disables session restoration/auth/cloud work, uses only the existing
+guest/local library namespace, and removes the login route and cloud controls.
+Catalog browsing/search/details now contact the existing metadata providers
+directly, with stable provider identities and bounded caches. Torrent engine,
+native player and local resume/settings persistence remain on-device. Backend
+URL/staging is no longer a release prerequisite; signing and explicit APK
+permission remain. Source validation passes including new local-only regressions.
+No backend resource was deleted and no APK was generated. See
+[the current architecture and user test steps](android-local-first.md); older
+hosting/account checkpoints below are historical, not current release blockers.
+Final evidence: 53 mobile/shared JS tests, TypeScript, shared/backend/daemon Go
+checks, production JS export and the updated readiness checker pass. Direct public
+provider browsing/details/seasons/episodes worked in a live read-only PC check.
+Hermes bytecode: 3,359,024 bytes; this is not APK size or Android memory usage.
+Native library code is unchanged; no new library or phone validation is claimed.
+
+## Botkeep staff confirmation — 26 October 2026
+
+Botkeep staff confirms auth Redis noeviction, 64 MiB maxmemory, AOF everysec and
+persistent data on normal restarts/redeploys. The application ACL cannot query
+CONFIG/INFO. Added an explicit, endpoint-bound staff-confirmation mode with a
+required evidence reference; strict live checks remain the default. TLS and
+connection checks remain active. Fixed logout falsely continuing after refresh
+revocation failure. Local HTTPS regressions include OOM writes and partial logout
+failure. This resolves the policy-verification deployment blocker; actual hosted
+migrations, app operations, durability and backup restore are still pending.
+See [Botkeep deployment](botkeep-deployment.md). No APK was built.
+
+## Botkeep adaptation — 25 October 2026
+
+Added a single-process backend entry point using the existing service factories,
+three isolated schemas in one PostgreSQL database and two separate Redis servers.
+This reduces the proposed deployment to four managed slots. A local ZIP packager
+creates static Go 1.27.3 Linux AMD64/ARM64 binaries, avoiding the provider's sole
+1.27.1 compiler profile. Resource bounds and verified remote TLS are configured.
+The standalone API dependencies were patched after advisory scanning. Local
+schema/restart and full HTTPS client regressions pass; Redis is still emulated.
+See [Botkeep setup](botkeep-deployment.md) for capabilities that must be confirmed
+before provisioning. No hosted deployment, real Redis verification or APK exists.
+
+## Pre-APK preparation checkpoint — 25 October 2026
+
+Completed the remaining local release preparation in one batch. Android backup
+is disabled and unnecessary storage/overlay permissions are blocked in tracked
+and regenerated configuration. Release guards reject missing/debug signing inputs;
+release native builds strip symbols. Paused/unchanged progress avoids duplicate
+history writes. A source-only readiness checker, ordered phone checklist, local
+metric collector and manual Linux container-verification workflow are prepared.
+
+Security review upgraded/pinned Go 1.27.3, anacrolix/torrent 1.61.0 and patched
+WebSocket, x/net, DTLS v3, STUN v3 and telemetry dependencies. Candidate regressions
+ran twice before adoption. The bounded storage interface now accepts cancellation
+context. The Windows fixture owns its seeder file explicitly. Host race checks,
+Android ARM64/CGO symbol scanning, Kotlin compile/five lifecycle tests and 16 KiB
+AAR verification pass. A failed linker attempt was fixed with the pinned anet
+package's documented Go private-symbol linker setting; phone networking remains
+unverified. See the native review for the limitation and exact scanner scope.
+
+The final stripped AAR is 8,671,388 bytes (updated unstripped: 17,026,817 bytes).
+The production Hermes export is 3,360,324 bytes and excludes the inspected npm
+advisory tooling. Full source checks still pass 47 JS tests plus TypeScript/Go;
+local PostgreSQL/HTTPS tests and standalone backend checks pass. These sizes are
+not an APK size or process-memory measurement.
+
+The manual Linux CI workflow is source/syntax/config-checked only; it was not
+uploaded, dispatched or counted as passing real-container verification. Staging
+HTTPS, real Redis/Nginx, private release signing and explicit APK permission remain
+external gates. No APK, installation, publishing, firmware change or reboot occurred.
+See [the pre-APK checkpoint](android-pre-apk-readiness.md) for the final evidence,
+inputs and [phone tests](android-phone-test-checklist.md). Nothing is required on
+USB or the phone yet.
+
+## Deployment preparation checkpoint — 25 October 2026
+
+Prepared standalone backend Docker builds, complete per-service module locks,
+separate persistent/no-eviction authentication Redis, bounded disposable cache,
+loopback-only development ports and a standalone HTTPS staging Compose file.
+Optional storage/monitoring services now require profiles. Added deployment source
+validation and a read-only HTTPS staging probe. No mobile dependency was added.
+
+Both Compose configurations pass parsing/isolation/required-input checks and all
+four backend services cross-compile to Linux. Full source validation passes 47
+JavaScript tests, TypeScript and Go suites. The development Docker Linux engine
+returned an internal API error and later timed out, so real container/Nginx/Redis
+verification remains pending. The user confirmed no staging server/domain is set
+up. Public deployment is not marked complete.
+
+There are five remaining major delivery milestones, with deployment preparation
+finished inside the first: backend verification; release readiness; authorized
+test APK; physical-device validation/fixes; authorized release APK and delivery.
+See [the deployment procedure](backend-deployment.md) for exact inputs, commands
+and evidence boundaries. No APK, public deployment or phone test occurred.
+
+## Library conflict checkpoint — 25 October 2026
+
+Implemented baseline-based library reconciliation. Remote deletions now remove
+unchanged local copies after restart, while pending offline additions and playback
+updates survive. An acknowledged deletion no longer hides a later re-add. A single
+account-scoped record persists items and compact identity/time baselines together;
+acknowledgments preserve edits made during requests and partial-collection failures.
+Corrupt records are retained and block replacement uploads. Baseline markers have
+a hard limit with an explicit error instead of silent eviction.
+
+Clean collections skip uploads. The Library screen refreshes on tab focus and
+supports pull-to-refresh, with no background polling or added mobile dependency.
+History still caps at 50 items; the watchlist caps at 5,000. This reduces unnecessary
+network writes, but device memory, storage cost, battery and startup still require
+measurement on the reference phone.
+
+Validation: **47 JavaScript tests passed** (40 mobile, seven core), mobile/core
+TypeScript passed, all backend/shared and daemon Go suites passed, and script
+syntax checks passed. Real PostgreSQL/HTTPS checks passed two independently saved
+mobile-store sessions covering remote deletion, offline addition, history clear,
+reload, re-add and unchanged-upload suppression. Redis remains a test-only emulator;
+no Android runtime result is implied. The test database was stopped afterward.
+
+Conflict rules and first-upgrade limitations are in [the sync protocol](library-sync-protocol.md).
+Pending local removes win; concurrent history edits choose the newer watched time.
+Clear History removes observed entries, preserving unseen additions from another
+device. The legacy format cannot recover historical deletion intent on first
+migration. Desktop protocol adoption, staging HTTPS/Redis, and physical device
+validation remain outstanding.
+
+Phone checks after APK approval: save on one session, remove in another, reopen or
+pull to refresh Library; confirm the removal persists, an offline addition survives,
+and explicit re-add works. Also test restart during sync and interrupted networking.
+No phone/USB action is required yet. No APK was generated.
+
+## Follow-up checkpoint — 24 October 2026
+
+The architecture review found backend compilation and cloud integration defects
+that were outside the original mobile validator. This follow-up repairs content,
+search and user service compilation, including outdated shared APIs in user
+startup and the missing show end-date request field. User startup now treats a
+failed migration as fatal rather than serving against an unknown schema.
+
+Library sync now shares a validated `{ items, revision }` wire contract, includes
+real timestamps, generates server-owned item IDs and requires a revision under a
+database transaction before replacing a collection. The client gates uploads on
+successful initial reads, serializes account work, retains local edits on failure
+and exposes a Library retry message. Logout cancels pending uploads instead of
+racing revocation; local changes remain scoped to that account. Protected API
+requests share token renewal and retry once with account/abort guards; startup
+cloud reads wait for renewal.
+
+The source validator now checks all four backend services and the shared Go
+packages, alongside the original mobile/core and torrent checks. Tests cover the
+shared Go/TypeScript JSON fixture, rejected initial reads, conflict/retry,
+serialized uploads, server IDs, invalid snapshots, transaction ordering/rollback,
+token renewal and stale-account replay. See [the sync protocol](library-sync-protocol.md)
+for migration requirements and the evidence boundary. The original transaction
+tests use a test double; the local integration follow-up below now supplies
+PostgreSQL/HTTPS evidence. A deployed gateway/Redis run remains pending.
+At this checkpoint, multi-device deletion handling and desktop protocol adoption
+were follow-up work; the 25 October checkpoint above adds mobile reconciliation. Android runtime/performance gates below
+remain pending; no APK was generated.
+
+Follow-up validation: **36 JavaScript tests passed** (29 mobile regressions and
+seven shared-core tests), mobile/core TypeScript passed, and all backend/shared
+Go and torrent daemon packages passed. Six new Go tests check the HTTP contract,
+input/identity normalization, stale-write ordering and rollback. Script syntax
+and Git whitespace checks passed. These are source checks, not a live database
+or phone result.
+
+### Local backend integration follow-up
+
+A new opt-in `npm run validate:backend:integration` check now runs real PostgreSQL
+16.15 migrations, transaction contention/rollback and the shared API client over
+a local HTTPS gateway. It uses the same auth/user app constructors as production;
+Redis is a test-only TCP emulator. Registration/login, account isolation,
+timestamps/numeric history, restart/download, deliberate clearing, revision
+conflicts, access-token renewal and logout revocation passed. It also exposed and
+fixed a reserved `current_time` SQL identifier and non-atomic refresh rotation.
+Three rounds of eight refresh requests now each yield one success; token-store
+fault/recovery checks pass. Auth startup now fails on migration errors.
+
+See [backend integration evidence](backend-integration-tests.md) for commands,
+test isolation and remaining gates. The test database process was stopped after
+the run. No external deployment, global database installation, APK build or
+physical-phone test occurred. Deployed Redis/gateway and Android checks remain
+pending. Later catalog and mobile deletion follow-ups are recorded in this file.
+
+### Catalog/search and episode-source follow-up
+
+Real local PostgreSQL/HTTPS checks now cover all four production application
+constructors. Fixed invalid series visibility queries, missing episode parent IDs,
+transactional season/episode counters, stale content details, unpublished-content
+access, empty-array contracts, search normalization and stable pagination. The
+integration fixtures contain metadata and dummy magnets only; no peers are contacted.
+
+Android catalog episodes now request their attached magnets before external
+search. Backend UUIDs and episode metadata survive the screen adapter. Catalog
+sources are validated and deduplicated, movie and episode screens share that
+adapter, and failed catalog requests show an error instead of reporting no sources.
+Abort guards prevent late results and unnecessary fallback searches after closing.
+No mobile dependency was added. External provider requests already in flight still
+finish in the provider layer; stale results are ignored rather than shown.
+
+Validation: **41 JavaScript tests passed** (34 mobile, seven core), both TypeScript
+projects passed, all backend/shared Go and daemon tests passed, and script syntax
+checks passed. The real PostgreSQL/HTTPS suite passed catalog browsing/search,
+publication rules, protected creation, concurrent counters, duplicate-insert
+rollback and warmed-detail cache refresh alongside the existing account/sync suite.
+PostgreSQL stops after each run; Redis remains a test-only emulator.
+
+Phone tests after an authorized build: browse and search movies/series, switch
+seasons, select a catalog episode, confirm attached sources load, close during
+loading, retry an offline failure, and verify the selected episode reaches playback.
+Nothing is required on the phone yet. No APK, deployment or physical-device test
+was performed. Search cache staleness across services, deployed gateway/Redis and
+measured Android memory, startup, playback, battery and APK size remain unverified.
+
 ## Scope and evidence
 
 This checkpoint implements the main source foundations of the Android plan. It does **not** certify that the application is finished, lightweight on a device, or ready for delivery.
@@ -40,7 +265,7 @@ npm run validate:mobile:native
 
 This builds an internal AAR and compiles/tests only `:streamforge-torrent-daemon`. A strict Gradle init script whitelists the Kotlin library compile/test entry points and rejects any app task or APK packaging task in their graph. It never installs anything or starts an emulator. It requires an already-generated native project and Android toolchain; it does not silently run prebuild.
 
-Latest result: mobile/core TypeScript passed; **24 JavaScript tests passed** (17 mobile regressions plus seven shared-core tests); engine/server Go tests passed; both config plugins and Android PowerShell scripts passed syntax checks. Git whitespace validation passed.
+Original checkpoint result: mobile/core TypeScript passed; **24 JavaScript tests passed** (17 mobile regressions plus seven shared-core tests); engine/server Go tests passed; both config plugins and Android PowerShell scripts passed syntax checks. Git whitespace validation passed.
 
 Native checkpoint results:
 
@@ -81,8 +306,8 @@ Regression coverage includes:
 - If a cached file disappears or is truncated, a read invalidates its completion so it can be fetched again; an unexpected filesystem read error cancels work. This recovery has local storage tests, not an Android low-storage result.
 - At least 1 GiB free storage is required at start, with a 256 MiB emergency floor checked during stats polling. These are conservative guardrails, not measured optimal values.
 - Guest library data stays separate when signing in. There is no automatic guest/account merge.
-- Local deletion markers prevent an older cloud snapshot from restoring removed items. Markers are scoped per account, bounded to 1,000 per collection, and cleared by explicitly adding the same item again. Full multi-device conflict resolution remains outside the evidence of the current tests.
-- History uploads are throttled; final account snapshots are also attempted at logout. Local saving remains available when the backend is unavailable.
+- The 25 October baseline policy replaces permanent local deletion markers. Remote deletion, offline edits and re-add are tested with independent saved mobile sessions over local HTTPS; first-upgrade ambiguity and clock-based history conflict rules remain documented limitations.
+- History uploads are throttled. Logout invalidates pending uploads; account-scoped local edits remain available for a later sign-in/retry. Local saving remains available when the backend is unavailable.
 - Autoplay-next, automatic source fallback and transcoding controls are hidden. Direct playback reports unsupported media rather than fabricating codec information.
 
 ## What the user should test after an authorized native build

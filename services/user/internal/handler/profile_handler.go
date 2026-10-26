@@ -1,12 +1,12 @@
 package handler
 
 import (
+	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"streamforge.local/pkg/response"
 	"streamforge/services/user/internal/dto"
 	"streamforge/services/user/internal/model"
 	"streamforge/services/user/internal/service"
-	"streamforge.local/pkg/response"
-	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 )
 
 type ProfileHandler struct {
@@ -25,13 +25,13 @@ func (h *ProfileHandler) GetProfile(c *fiber.Ctx) error {
 
 	profile, err := h.service.GetProfile(c.Context(), userID)
 	if err != nil {
-		return response.InternalServerError(c, "Failed to get profile")
+		return response.InternalError(c, "Failed to get profile")
 	}
 	if profile == nil {
 		return response.NotFound(c, "Profile not found")
 	}
 
-	return response.Success(c, dto.ToProfileResponse(profile))
+	return response.OK(c, dto.ToProfileResponse(profile))
 }
 
 func (h *ProfileHandler) UpdateProfile(c *fiber.Ctx) error {
@@ -53,8 +53,8 @@ func (h *ProfileHandler) UpdateProfile(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.UpdateProfile(c.Context(), profile); err != nil {
-		return response.InternalServerError(c, "Failed to update profile")
+		return response.InternalError(c, "Failed to update profile")
 	}
 
-	return response.Success(c, fiber.Map{"status": "success"})
+	return response.OK(c, fiber.Map{"status": "success"})
 }

@@ -2,6 +2,25 @@
 
 Scope: `npm audit --workspace=apps/mobile --omit=dev --json`, the installed dependency paths and a production Metro/Hermes JS export. This does not audit Go modules, native libraries, the server or a finished APK.
 
+## Refresh — 25 October 2026
+
+The current `npm audit --workspace=apps/mobile --omit=dev --json` report contains
+**8 entries: five high, three moderate, zero critical**. npm counts parent paths,
+not distinct flaws shipped in the app. This differs from the older report below
+without another forced framework update.
+
+The current underlying advisory paths are node-forge 1.4.0 (Expo certificate/CLI
+tooling), uuid 7.0.3 (xcode tooling, with an additional dev-only ngrok uuid copy),
+and zod 3.25.76 (Expo CLI). The zod oversized-collection advisory lists a v4 fix;
+forcing that major into a CLI built for v3 was not applied. Expo 44 downgrade
+suggestions were not applied. The production Android source-map inventory contains
+no node-forge, uuid, zod or braces implementations. The export bundles about
+3.36 MB of Hermes bytecode; source maps remain local diagnostics.
+
+Native review and compatible transport/toolchain fixes are recorded separately in
+[the native dependency review](android-native-dependency-review.md). No npm audit
+result proves the safety or size of an unbuilt APK.
+
 ## Applied compatible updates
 
 | Package | Before | After |

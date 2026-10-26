@@ -9,21 +9,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"streamforge.local/pkg/auth"
 	"streamforge.local/pkg/cache"
 	"streamforge.local/pkg/database"
 	"streamforge.local/pkg/logger"
-	"streamforge.local/pkg/middleware"
+	authapp "streamforge/services/auth/app"
 	"streamforge/services/auth/internal/config"
-	"streamforge/services/auth/internal/handler"
-	"streamforge/services/auth/internal/mailer"
-	"streamforge/services/auth/internal/repository"
-	"streamforge/services/auth/internal/service"
 )
 
 func main() {
@@ -49,7 +43,7 @@ func main() {
 
 	// ── Run database migrations ─────────────────────────────────────────
 	if err := runMigrations(cfg.DatabaseURL); err != nil {
-		log.Warn().Err(err).Msg("migration warning")
+		log.Fatal().Err(err).Msg("database migration failed")
 	} else {
 		log.Info().Msg("database migrations applied")
 	}
@@ -62,58 +56,7 @@ func main() {
 	defer redisClient.Close()
 	log.Info().Msg("connected to Redis")
 
-	// ── Build dependencies ──────────────────────────────────────────────
-	userRepo := repository.NewUserRepository(pool)
-	tokenRepo := repository.NewTokenRepository(redisClient)
-	oauthRepo := repository.NewOAuthRepository(pool)
-
-	mailCfg := mailer.Config{
-		Host:   cfg.SMTPHost,
-		Port:   cfg.SMTPPort,
-		User:   cfg.SMTPUser,
-		Pass:   cfg.SMTPPass,
-		From:   cfg.SMTPFrom,
-		AppEnv: cfg.AppEnv,
-	}
-	appMailer := mailer.NewMailer(mailCfg, log)
-
-	jwtCfg := auth.JWTConfig{
-		Secret:     cfg.JWTSecret,
-		AccessTTL:  cfg.AccessTTL,
-		RefreshTTL: cfg.RefreshTTL,
-		Issuer:     "streamforge-auth",
-	}
-
-	authService := service.NewAuthService(userRepo, tokenRepo, appMailer, jwtCfg, log)
-	authHandler := handler.NewAuthHandler(authService, log)
-
-	oauthService := service.NewOAuthService(cfg, userRepo, oauthRepo, tokenRepo, jwtCfg, log)
-	oauthHandler := handler.NewOAuthHandler(oauthService, cfg.FrontendURL, log)
-
-	// ── Create Fiber app ────────────────────────────────────────────────
-	app := fiber.New(fiber.Config{
-		AppName:               "StreamForge Auth Service",
-		ReadTimeout:           10 * time.Second,
-		WriteTimeout:          10 * time.Second,
-		IdleTimeout:           120 * time.Second,
-		DisableStartupMessage: cfg.IsProd(),
-	})
-
-	// Apply standard middleware and live Prometheus metrics
-	middleware.Setup(app, log)
-	middleware.RegisterMetrics(app, "auth")
-
-	// Health check
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"service": "auth",
-			"time":    time.Now().UTC(),
-		})
-	})
-
-	// Register auth routes
-	handler.SetupRoutes(app, authHandler, oauthHandler, cfg.JWTSecret, tokenRepo)
+	app := authapp.New(pool, redisClient, cfg, log)
 
 	// ── Graceful shutdown ───────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)

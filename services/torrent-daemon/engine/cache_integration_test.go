@@ -13,7 +13,28 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 )
+
+// The fixture owns its single read-only file handle explicitly. The app uses
+// boundedCache; the seeder must not depend on a library's default part-file pool.
+type fixtureStorage struct{ file *os.File }
+type fixturePiece struct{ *io.SectionReader }
+
+func (p fixturePiece) WriteAt([]byte, int64) (int, error) { return 0, os.ErrPermission }
+func (p fixturePiece) MarkComplete() error                { return nil }
+func (p fixturePiece) MarkNotComplete() error             { return nil }
+func (p fixturePiece) Completion() storage.Completion {
+	return storage.Completion{Ok: true, Complete: true}
+}
+func (s fixtureStorage) OpenTorrent(ctx context.Context, _ *metainfo.Info, _ metainfo.Hash) (storage.TorrentImpl, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.TorrentImpl{}, err
+	}
+	return storage.TorrentImpl{Piece: func(p metainfo.Piece) storage.PieceImpl {
+		return fixturePiece{io.NewSectionReader(s.file, p.Offset(), p.Length())}
+	}, Close: s.file.Close}, nil
+}
 
 func localPeerConfig(directory string) *torrent.ClientConfig {
 	cfg := torrent.NewDefaultClientConfig()
@@ -64,6 +85,12 @@ func TestLocalTorrentStreamsBeyondCacheAndSeeksBack(t *testing.T) {
 	meta := &metainfo.MetaInfo{InfoBytes: infoBytes}
 	seedConfig := localPeerConfig(seedRoot)
 	seedConfig.Seed = true
+	seedFile, err := os.Open(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seedFile.Close()
+	seedConfig.DefaultStorage = fixtureStorage{seedFile}
 	seeder, err := torrent.NewClient(seedConfig)
 	if err != nil {
 		t.Fatal(err)

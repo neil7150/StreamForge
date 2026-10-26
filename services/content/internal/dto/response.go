@@ -39,30 +39,30 @@ type MovieResponse struct {
 
 // MovieDetailResponse is the API detail response for a movie (full view).
 type MovieDetailResponse struct {
-	ID             uuid.UUID             `json:"id"`
-	Title          string                `json:"title"`
-	Slug           string                `json:"slug"`
-	Overview       *string               `json:"overview,omitempty"`
-	Tagline        *string               `json:"tagline,omitempty"`
-	ReleaseDate    *time.Time            `json:"release_date,omitempty"`
-	RuntimeMinutes *int                  `json:"runtime_minutes,omitempty"`
-	Language       string                `json:"language"`
-	PosterURL      *string               `json:"poster_url,omitempty"`
-	BackdropURL    *string               `json:"backdrop_url,omitempty"`
-	TrailerURL     *string               `json:"trailer_url,omitempty"`
-	ImdbID         *string               `json:"imdb_id,omitempty"`
-	ContentRating  *string               `json:"content_rating,omitempty"`
-	LicenseType    string                `json:"license_type"`
-	LicenseURL     *string               `json:"license_url,omitempty"`
-	Status         string                `json:"status"`
-	AvgRating      float64               `json:"avg_rating"`
-	RatingCount    int                   `json:"rating_count"`
-	ViewCount      int64                 `json:"view_count"`
-	Genres         []GenreResponse       `json:"genres"`
-	MagnetLinks    []MagnetLinkResponse  `json:"magnet_links"`
-	Subtitles      []SubtitleResponse    `json:"subtitles"`
-	CreatedAt      time.Time             `json:"created_at"`
-	UpdatedAt      time.Time             `json:"updated_at"`
+	ID             uuid.UUID            `json:"id"`
+	Title          string               `json:"title"`
+	Slug           string               `json:"slug"`
+	Overview       *string              `json:"overview,omitempty"`
+	Tagline        *string              `json:"tagline,omitempty"`
+	ReleaseDate    *time.Time           `json:"release_date,omitempty"`
+	RuntimeMinutes *int                 `json:"runtime_minutes,omitempty"`
+	Language       string               `json:"language"`
+	PosterURL      *string              `json:"poster_url,omitempty"`
+	BackdropURL    *string              `json:"backdrop_url,omitempty"`
+	TrailerURL     *string              `json:"trailer_url,omitempty"`
+	ImdbID         *string              `json:"imdb_id,omitempty"`
+	ContentRating  *string              `json:"content_rating,omitempty"`
+	LicenseType    string               `json:"license_type"`
+	LicenseURL     *string              `json:"license_url,omitempty"`
+	Status         string               `json:"status"`
+	AvgRating      float64              `json:"avg_rating"`
+	RatingCount    int                  `json:"rating_count"`
+	ViewCount      int64                `json:"view_count"`
+	Genres         []GenreResponse      `json:"genres"`
+	MagnetLinks    []MagnetLinkResponse `json:"magnet_links"`
+	Subtitles      []SubtitleResponse   `json:"subtitles"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 // ShowResponse is the API list response for a show (summary view).
@@ -118,7 +118,7 @@ type SeasonResponse struct {
 	PosterURL    *string           `json:"poster_url,omitempty"`
 	AirDate      *time.Time        `json:"air_date,omitempty"`
 	EpisodeCount int               `json:"episode_count"`
-	Episodes     []EpisodeResponse `json:"episodes,omitempty"`
+	Episodes     []EpisodeResponse `json:"episodes"`
 }
 
 // EpisodeResponse is the API response for an episode.
@@ -134,17 +134,17 @@ type EpisodeResponse struct {
 
 // MagnetLinkResponse is the API response for a magnet link.
 type MagnetLinkResponse struct {
-	ID            uuid.UUID  `json:"id"`
-	MagnetURI     string     `json:"magnet_uri"`
-	InfoHash      string     `json:"info_hash"`
-	Quality       string     `json:"quality"`
-	Codec         *string    `json:"codec,omitempty"`
-	FileSizeBytes *int64     `json:"file_size_bytes,omitempty"`
-	SeedCount     int        `json:"seed_count"`
-	PeerCount     int        `json:"peer_count"`
-	Verified      bool       `json:"verified"`
-	Source        *string    `json:"source,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            uuid.UUID `json:"id"`
+	MagnetURI     string    `json:"magnet_uri"`
+	InfoHash      string    `json:"info_hash"`
+	Quality       string    `json:"quality"`
+	Codec         *string   `json:"codec,omitempty"`
+	FileSizeBytes *int64    `json:"file_size_bytes,omitempty"`
+	SeedCount     int       `json:"seed_count"`
+	PeerCount     int       `json:"peer_count"`
+	Verified      bool      `json:"verified"`
+	Source        *string   `json:"source,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // SubtitleResponse is the API response for a subtitle.

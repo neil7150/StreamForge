@@ -1,0 +1,5 @@
+# Test-only overlay: expose the staging gateway on loopback, never publicly.
+services:
+  nginx:
+    ports: !override
+      - "127.0.0.1:${STREAMFORGE_TEST_HTTPS_PORT:-18443}:443"

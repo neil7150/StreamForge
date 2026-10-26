@@ -106,6 +106,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const progressTimer = useRef<NodeJS.Timeout | null>(null)
   const currentTimeRef = useRef(initialTime || 0)
   const durationRef = useRef(initialDuration || 0)
+  const lastSavedProgress = useRef<string | null>(null)
 
   const addToHistory = useUserDataStore((s) => s.addToHistory)
   const playbackSettings = usePlaybackSettingsStore()
@@ -331,7 +332,9 @@ const PlayerContent = ({ navigation, route }: Props) => {
     const curTime = currentTimeRef.current
     const dur = durationRef.current
     if (accountGenerationRef.current !== getAuthGeneration() || !Number.isFinite(curTime) || curTime <= 0) return
-    const progressRatio = dur > 0 ? curTime / dur : 0
+    const checkpoint = JSON.stringify([getAuthGeneration(), params.contentKey, infoHash, selectedFileRef.current, curTime, dur, magnetURI, initialStreamURL])
+    if (lastSavedProgress.current === checkpoint) return
+    const progressRatio = dur > 0 ? Math.max(0, Math.min(1, curTime / dur)) : 0
     addToHistory({
       movieId: infoHash,
       contentKey: params.contentKey || (isSeries ? `episode:${seriesTitle || infoHash}:${seasonNumber || 0}:${episodeNumber || 0}` : `magnet:${infoHash}`),
@@ -349,6 +352,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
       fileIndex: selectedFileRef.current,
       streamURL: isDirectStream ? initialStreamURL : undefined
     })
+    lastSavedProgress.current = checkpoint
   }, [infoHash, isSeries, seriesTitle, seasonNumber, episodeNumber, title, posterUrl, magnetURI, addToHistory, params.contentKey, isDirectStream, initialStreamURL])
 
   useEffect(() => {

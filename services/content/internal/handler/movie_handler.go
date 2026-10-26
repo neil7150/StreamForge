@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
@@ -66,7 +67,10 @@ func (h *MovieHandler) GetMovie(c *fiber.Ctx) error {
 	movie, err := h.svc.GetMovie(c.Context(), slug)
 	if err != nil {
 		h.log.Error().Err(err).Str("slug", slug).Msg("Failed to get movie")
-		return response.NotFound(c, "Movie not found")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Movie not found")
+		}
+		return response.InternalError(c, "Failed to fetch movie")
 	}
 
 	return response.OK(c, dto.ToMovieDetailResponse(movie))
@@ -82,6 +86,9 @@ func (h *MovieHandler) GetMovieMagnets(c *fiber.Ctx) error {
 	magnets, err := h.svc.GetMovieMagnets(c.Context(), id)
 	if err != nil {
 		h.log.Error().Err(err).Str("id", id.String()).Msg("Failed to get magnets")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Content not found")
+		}
 		return response.InternalError(c, "Failed to fetch magnets")
 	}
 
@@ -103,6 +110,9 @@ func (h *MovieHandler) GetMovieSubtitles(c *fiber.Ctx) error {
 	subs, err := h.svc.GetMovieSubtitles(c.Context(), id)
 	if err != nil {
 		h.log.Error().Err(err).Str("id", id.String()).Msg("Failed to get subtitles")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Content not found")
+		}
 		return response.InternalError(c, "Failed to fetch subtitles")
 	}
 

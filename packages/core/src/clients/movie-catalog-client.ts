@@ -179,6 +179,9 @@ export class CinemetaMovieClient {
 
     const pending = loader()
       .then((value) => {
+        for (const [entryKey, entry] of this.cache) if (entry.expiresAt <= this.now()) this.cache.delete(entryKey)
+        this.cache.delete(key)
+        while (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
         this.cache.set(key, { value, expiresAt: this.now() + ttlMs })
         return value
       })

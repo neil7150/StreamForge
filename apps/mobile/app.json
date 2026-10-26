@@ -2,6 +2,7 @@
   "expo": {
     "name": "StreamForge",
     "slug": "streamforge",
+    "extra": { "runtimeMode": "device-local" },
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -44,6 +45,12 @@
             }
           ]
         }
+      ],
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ]
     },
     "plugins": [
@@ -51,7 +58,8 @@
       "expo-screen-orientation",
       "expo-video",
       "./plugins/with-localhost-cleartext",
-      "./plugins/with-android-release"
+      "./plugins/with-android-release",
+      "./plugins/with-android-test-build"
     ]
   }
 }

@@ -4,6 +4,15 @@ Prepared: 20 October 2026
 
 ## Objective and execution boundary
 
+**Scope update — 26 October 2026:** The user requires an account-free, device-local
+Android release. No owned backend, PC server, Botkeep deployment or backend URL is
+required. Shared auth/sync/backend implementations are retained for a future
+explicitly scoped account feature, not as prerequisites for this release.
+Current implementation evidence is in `android-local-first.md` and
+`android-implementation-status.md`; these supersede older account/staging tasks
+in this historical roadmap. Internet is still needed for direct external metadata,
+source discovery and torrent peers. The app is not an offline media catalog.
+
 Deliver a reliable, lightweight Android streaming application as a signed APK. Keep the existing React Native/Expo UI, Kotlin native module, Go torrent engine and native video player.
 
 **Do not generate an APK until the user explicitly authorizes an APK build.** This includes debug, development and release APKs, Expo run commands that build an APK, and Gradle assemble tasks. Source changes, static analysis, unit tests and release-configuration preparation can proceed within an authorized implementation task. Device validation requiring a new binary must wait at the build gate; tests against an existing installation must be identified as testing that older version.
@@ -32,12 +41,14 @@ Include:
 - Source selection and exact video-file selection for multi-file torrents.
 - Foreground playback with seek, pause, retry, visible errors and reliable resume.
 - Watchlist, history and preferences that survive process death.
-- Existing account login/register/sync flows completed with account isolation.
+- Device-local library and preferences, with no login/register/cloud sync.
 - Subtitles supported by the current player path, with clear unavailable states.
 - Cache usage display, real clearing and bounded storage.
 - Standalone signed APK delivery after explicit build approval.
 
 Defer:
+
+- Accounts, login, cloud sync and the owned backend; preserved source is future work.
 
 - Offline download management, background downloading/seeding, transcoding, casting, picture-in-picture, recommendations and new social features.
 - Autoplay-next and automatic source fallback until the basic session lifecycle passes its tests. Hide their controls in the first release if they are deferred.

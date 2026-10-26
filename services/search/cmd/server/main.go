@@ -8,17 +8,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/logger"
-	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
-	"streamforge.local/pkg/middleware"
+	searchapp "streamforge/services/search/app"
 	"streamforge/services/search/internal/config"
-	"streamforge/services/search/internal/handler"
-	"streamforge/services/search/internal/service"
 )
 
 func main() {
@@ -54,24 +49,7 @@ func main() {
 	rdb := redis.NewClient(rdbOpts)
 	defer rdb.Close()
 
-	// Dependencies
-	searchService := service.NewSearchService(dbPool, rdb, log)
-	searchHandler := handler.NewSearchHandler(searchService, log)
-
-	// Fiber App
-	app := fiber.New(fiber.Config{
-		DisableStartupMessage: true,
-	})
-
-	app.Use(recover.New())
-	app.Use(logger.New())
-	middleware.RegisterMetrics(app, "search")
-
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
-	})
-
-	handler.SetupRoutes(app, searchHandler)
+	app := searchapp.New(dbPool, rdb, log)
 
 	// Graceful shutdown
 	go func() {
@@ -87,10 +65,10 @@ func main() {
 	<-c
 
 	log.Info().Msg("Shutting down gracefully, press Ctrl+C again to force")
-	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
-	if err := app.Shutdown(); err != nil {
+
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("App shutdown error")
 	}
 	log.Info().Msg("Server stopped")

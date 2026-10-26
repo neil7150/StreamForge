@@ -88,7 +88,7 @@ func (s *ContentService) ListMovies(ctx context.Context, page, perPage int, genr
 func (s *ContentService) GetMovie(ctx context.Context, slug string) (model.Movie, error) {
 	// Try cache first
 	cacheKey := cacheKeyMovieBySlug + slug
-	if cached, err := s.getMovieFromCache(ctx, cacheKey); err == nil {
+	if cached, err := s.getMovieFromCache(ctx, cacheKey); err == nil && cached.Status == "active" {
 		s.log.Debug().Str("slug", slug).Msg("movie cache hit")
 		s.incrementViewCountAsync(cached.ID)
 		return cached, nil
@@ -105,7 +105,7 @@ func (s *ContentService) GetMovie(ctx context.Context, slug string) (model.Movie
 
 	// Load associations
 	if err := s.enrichMovie(ctx, &movie); err != nil {
-		s.log.Warn().Err(err).Msg("failed to enrich movie")
+		return movie, err
 	}
 
 	// Increment view count asynchronously
@@ -233,6 +233,9 @@ func (s *ContentService) DeleteMovie(ctx context.Context, id uuid.UUID) error {
 
 // GetMovieMagnets returns magnet links for a movie.
 func (s *ContentService) GetMovieMagnets(ctx context.Context, movieID uuid.UUID) ([]model.MagnetLink, error) {
+	if err := s.requirePublicMovie(ctx, movieID); err != nil {
+		return nil, err
+	}
 	magnets, err := s.magnetRepo.GetByContent(ctx, "movie", movieID)
 	if err != nil {
 		s.log.Error().Err(err).Str("movie_id", movieID.String()).Msg("failed to get movie magnets")
@@ -265,6 +268,9 @@ func (s *ContentService) AddMagnetLink(ctx context.Context, ml model.MagnetLink)
 
 // GetMovieSubtitles returns subtitles for a movie.
 func (s *ContentService) GetMovieSubtitles(ctx context.Context, movieID uuid.UUID) ([]model.Subtitle, error) {
+	if err := s.requirePublicMovie(ctx, movieID); err != nil {
+		return nil, err
+	}
 	subs, err := s.subtitleRepo.GetByContent(ctx, "movie", movieID)
 	if err != nil {
 		s.log.Error().Err(err).Str("movie_id", movieID.String()).Msg("failed to get movie subtitles")
@@ -274,6 +280,20 @@ func (s *ContentService) GetMovieSubtitles(ctx context.Context, movieID uuid.UUI
 		subs = []model.Subtitle{}
 	}
 	return subs, nil
+}
+
+func (s *ContentService) requirePublicMovie(ctx context.Context, id uuid.UUID) error {
+	movie, err := s.movieRepo.GetByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if movie.Status != "active" {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // GetTrending returns trending movies (cached).
@@ -460,8 +480,8 @@ func (s *ContentService) invalidateMovieCaches(ctx context.Context) {
 // --- Slug generation ---
 
 var (
-	slugRegexp    = regexp.MustCompile(`[^a-z0-9]+`)
-	slugDashTrim  = regexp.MustCompile(`^-+|-+$`)
+	slugRegexp   = regexp.MustCompile(`[^a-z0-9]+`)
+	slugDashTrim = regexp.MustCompile(`^-+|-+$`)
 )
 
 // generateSlug creates a URL-friendly slug from a title.

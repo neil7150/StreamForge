@@ -2,8 +2,8 @@ package dto
 
 import (
 	"encoding/json"
-	"time"
 	"github.com/google/uuid"
+	"time"
 )
 
 type UpdateProfileRequest struct {
@@ -13,7 +13,8 @@ type UpdateProfileRequest struct {
 }
 
 type SyncWatchlistRequest struct {
-	Items []WatchlistItemDTO `json:"items"`
+	Items    []WatchlistItemDTO `json:"items"`
+	Revision *int64             `json:"revision"`
 }
 
 type WatchlistItemDTO struct {
@@ -26,7 +27,8 @@ type WatchlistItemDTO struct {
 }
 
 type SyncHistoryRequest struct {
-	Items []HistoryItemDTO `json:"items"`
+	Items    []HistoryItemDTO `json:"items"`
+	Revision *int64           `json:"revision"`
 }
 
 type HistoryItemDTO struct {
@@ -35,8 +37,8 @@ type HistoryItemDTO struct {
 	Title       *string         `json:"title"`
 	PosterURL   *string         `json:"poster_url"`
 	Progress    float64         `json:"progress"`
-	CurrentTime *float64        `json:"current_time"`
-	Duration    *float64        `json:"duration"`
+	CurrentTime *float64        `json:"current_time,omitempty"`
+	Duration    *float64        `json:"duration,omitempty"`
 	Metadata    json.RawMessage `json:"metadata"`
 	WatchedAt   time.Time       `json:"watched_at"`
 }

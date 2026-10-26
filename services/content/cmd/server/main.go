@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -16,12 +15,9 @@ import (
 	"streamforge.local/pkg/cache"
 	"streamforge.local/pkg/database"
 	"streamforge.local/pkg/logger"
-	pkgmw "streamforge.local/pkg/middleware"
+	contentapp "streamforge/services/content/app"
 
 	"streamforge/services/content/internal/config"
-	"streamforge/services/content/internal/handler"
-	"streamforge/services/content/internal/repository"
-	"streamforge/services/content/internal/service"
 )
 
 func main() {
@@ -43,7 +39,7 @@ func main() {
 
 	// ── Run migrations ────────────────────────────────────
 	if err := runMigrations(cfg.DatabaseURL); err != nil {
-		log.Warn().Err(err).Msg("Migration warning (may already be applied)")
+		log.Fatal().Err(err).Msg("Database migration failed")
 	}
 
 	// ── Connect to Redis ──────────────────────────────────
@@ -61,50 +57,7 @@ func main() {
 	defer authRDB.Close()
 	tokenBlacklist := pkgauth.NewRedisTokenBlacklist(authRDB)
 
-	// ── Initialize layers ─────────────────────────────────
-	movieRepo := repository.NewMovieRepository(pool)
-	genreRepo := repository.NewGenreRepository(pool)
-	magnetRepo := repository.NewMagnetRepository(pool)
-	subtitleRepo := repository.NewSubtitleRepository(pool)
-
-	contentSvc := service.NewContentService(movieRepo, magnetRepo, subtitleRepo, rdb, log)
-	genreSvc := service.NewGenreService(genreRepo, movieRepo, rdb, log)
-
-	movieHandler := handler.NewMovieHandler(contentSvc, log)
-	genreHandler := handler.NewGenreHandler(genreSvc, log)
-	showRepo := repository.NewShowRepository(pool)
-	showSvc := service.NewShowService(showRepo, genreRepo, magnetRepo, subtitleRepo, rdb, log)
-	showHandler := handler.NewShowHandler(showSvc, log)
-
-	// ── Create Fiber app ──────────────────────────────────
-	app := fiber.New(fiber.Config{
-		AppName:      "StreamForge Content Service",
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			code := fiber.StatusInternalServerError
-			message := "Internal server error"
-			if e, ok := err.(*fiber.Error); ok {
-				code = e.Code
-				message = e.Message
-			}
-			return c.Status(code).JSON(fiber.Map{
-				"success": false,
-				"error":   fiber.Map{"code": "INTERNAL_ERROR", "message": message},
-			})
-		},
-	})
-
-	pkgmw.Setup(app, log)
-	pkgmw.RegisterMetrics(app, "content")
-
-	// Health check
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok", "service": "content"})
-	})
-
-	// Register routes
-	handler.SetupRoutes(app, movieHandler, genreHandler, showHandler, cfg.JWTSecret, tokenBlacklist)
+	app := contentapp.New(pool, rdb, cfg.JWTSecret, tokenBlacklist, log)
 
 	// ── Start server ──────────────────────────────────────
 	go func() {

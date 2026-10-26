@@ -9,33 +9,27 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  TextInput
+  TextInput,
+  Linking
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation } from '@react-navigation/native'
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import {
   usePlaybackSettingsStore,
-  useAuthStore,
   type PreferredQuality,
   type SubtitleMode
 } from '@streamforge/core'
 import { colors } from '../theme/colors'
 import { flushMobileStorage } from '../storage/mobile-storage'
-import type { RootStackParamList } from '../navigation/types'
 import {
   User,
   PlaySquare,
   Globe,
   Info,
-  LogOut,
-  LogIn,
   Trash2
 } from 'lucide-react-native'
 
 export function SettingsScreen() {
   const insets = useSafeAreaInsets()
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>()
 
   const settings = usePlaybackSettingsStore()
   const [cacheBytes, setCacheBytes] = useState<number | null>(null)
@@ -47,7 +41,6 @@ export function SettingsScreen() {
     void mobileTorrentAPI.getCacheSize().then(size => { if (active) setCacheBytes(size) }).catch(() => { if (active) setCacheBytes(null) })
     return () => { active = false }
   }, []))
-  const { user, isAuthenticated, logout } = useAuthStore()
 
   const qualityOptions: PreferredQuality[] = ['auto', '1080p', '720p', '2160p']
   const subtitleOptions: { label: string; value: SubtitleMode }[] = [
@@ -62,18 +55,6 @@ export function SettingsScreen() {
     { label: 'Japanese', code: 'jpn' }
   ]
 
-  const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await logout()
-        }
-      }
-    ])
-  }
 
   const handleClearCache = async () => {
     if (clearingCache) return
@@ -94,36 +75,17 @@ export function SettingsScreen() {
     >
       <Text style={styles.screenTitle}>Settings</Text>
 
-      {/* Account Section */}
+      {/* Device-local library */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <User size={18} color={colors.primary} />
-          <Text style={styles.sectionTitle}>Account</Text>
+          <Text style={styles.sectionTitle}>On this device</Text>
         </View>
 
         <View style={styles.card}>
-          {isAuthenticated && user ? (
-            <View>
-              <Text style={styles.accountEmail}>{user.email}</Text>
-              <Text style={styles.accountRole}>Status: {user.is_active ? 'Active' : 'Pending'}</Text>
-              <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
-                <LogOut size={16} color={colors.destructive} />
-                <Text style={styles.logoutText}>Sign Out</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.loginCardInner}>
-              <Text style={styles.loginHint}>Sign in to sync your watch history and watchlist across devices.</Text>
-              <TouchableOpacity
-                style={styles.loginButton}
-                onPress={() => navigation.navigate('Login')}
-                activeOpacity={0.8}
-              >
-                <LogIn size={16} color="#FFFFFF" />
-                <Text style={styles.loginButtonText}>Sign In / Register</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          <Text style={styles.loginHint}>Your watchlist, watch history and preferences are saved on this phone. No account is needed. Clearing app data or uninstalling removes this saved data.</Text>
+          <Text style={styles.settingDesc}>Browsing and source discovery use online providers. Playback and saved progress are handled on this phone.</Text>
+          <Text style={styles.settingDesc}>Metadata: <Text accessibilityRole="link" style={{ color: colors.primary }} onPress={() => { void Linking.openURL('https://www.stremio.com/') }}>Cinemeta / Stremio</Text> and <Text accessibilityRole="link" style={{ color: colors.primary }} onPress={() => { void Linking.openURL('https://www.tvmaze.com/api#licensing') }}>TVmaze (CC BY-SA)</Text>.</Text>
         </View>
       </View>
 

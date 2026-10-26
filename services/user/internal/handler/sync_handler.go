@@ -1,12 +1,14 @@
 package handler
 
 import (
-	"streamforge/services/user/internal/dto"
-	"streamforge/services/user/internal/model"
-	"streamforge/services/user/internal/service"
-	"streamforge.local/pkg/response"
+	"errors"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"streamforge.local/pkg/response"
+	"streamforge/services/user/internal/dto"
+	"streamforge/services/user/internal/model"
+	"streamforge/services/user/internal/repository"
+	"streamforge/services/user/internal/service"
 )
 
 type SyncHandler struct {
@@ -25,22 +27,22 @@ func (h *SyncHandler) GetWatchlist(c *fiber.Ctx) error {
 
 	items, err := h.service.GetWatchlist(c.Context(), userID)
 	if err != nil {
-		return response.InternalServerError(c, "Failed to get watchlist")
+		return response.InternalError(c, "Failed to get watchlist")
 	}
 
-	var dtoItems []dto.WatchlistItemDTO
-	for _, item := range items {
+	dtoItems := make([]dto.WatchlistItemDTO, 0, len(items.Items))
+	for _, item := range items.Items {
 		dtoItems = append(dtoItems, dto.WatchlistItemDTO{
 			ID:         item.ID,
 			ContentKey: item.ContentKey,
-			Title:      item.Title,
-			PosterURL:  item.PosterURL,
+			Title:      cloudText(item.Title),
+			PosterURL:  cloudText(item.PosterURL),
 			Metadata:   item.Metadata,
 			AddedAt:    item.AddedAt,
 		})
 	}
 
-	return response.Success(c, dto.WatchlistResponse{Items: dtoItems})
+	return response.OK(c, dto.WatchlistResponse{Items: dtoItems, Revision: items.Revision})
 }
 
 func (h *SyncHandler) SyncWatchlist(c *fiber.Ctx) error {
@@ -54,7 +56,10 @@ func (h *SyncHandler) SyncWatchlist(c *fiber.Ctx) error {
 		return response.BadRequest(c, "Invalid request body")
 	}
 
-	var modelItems []model.WatchlistItem
+	if req.Revision == nil || req.Items == nil {
+		return response.BadRequest(c, "An items array and revision are required")
+	}
+	modelItems := make([]model.WatchlistItem, 0, len(req.Items))
 	for _, item := range req.Items {
 		modelItems = append(modelItems, model.WatchlistItem{
 			ID:         item.ID,
@@ -67,11 +72,12 @@ func (h *SyncHandler) SyncWatchlist(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.service.SyncWatchlist(c.Context(), userID, modelItems); err != nil {
-		return response.InternalServerError(c, "Failed to sync watchlist")
+	revision, err := h.service.SyncWatchlist(c.Context(), userID, modelItems, *req.Revision)
+	if err != nil {
+		return syncError(c, err)
 	}
 
-	return response.Success(c, fiber.Map{"status": "success"})
+	return response.OK(c, fiber.Map{"revision": revision})
 }
 
 func (h *SyncHandler) GetHistory(c *fiber.Ctx) error {
@@ -82,16 +88,16 @@ func (h *SyncHandler) GetHistory(c *fiber.Ctx) error {
 
 	items, err := h.service.GetHistory(c.Context(), userID)
 	if err != nil {
-		return response.InternalServerError(c, "Failed to get history")
+		return response.InternalError(c, "Failed to get history")
 	}
 
-	var dtoItems []dto.HistoryItemDTO
-	for _, item := range items {
+	dtoItems := make([]dto.HistoryItemDTO, 0, len(items.Items))
+	for _, item := range items.Items {
 		dtoItems = append(dtoItems, dto.HistoryItemDTO{
 			ID:          item.ID,
 			ContentKey:  item.ContentKey,
-			Title:       item.Title,
-			PosterURL:   item.PosterURL,
+			Title:       cloudText(item.Title),
+			PosterURL:   cloudText(item.PosterURL),
 			Progress:    item.Progress,
 			CurrentTime: item.CurrentTime,
 			Duration:    item.Duration,
@@ -100,7 +106,7 @@ func (h *SyncHandler) GetHistory(c *fiber.Ctx) error {
 		})
 	}
 
-	return response.Success(c, dto.HistoryResponse{Items: dtoItems})
+	return response.OK(c, dto.HistoryResponse{Items: dtoItems, Revision: items.Revision})
 }
 
 func (h *SyncHandler) SyncHistory(c *fiber.Ctx) error {
@@ -114,7 +120,10 @@ func (h *SyncHandler) SyncHistory(c *fiber.Ctx) error {
 		return response.BadRequest(c, "Invalid request body")
 	}
 
-	var modelItems []model.WatchHistoryItem
+	if req.Revision == nil || req.Items == nil {
+		return response.BadRequest(c, "An items array and revision are required")
+	}
+	modelItems := make([]model.WatchHistoryItem, 0, len(req.Items))
 	for _, item := range req.Items {
 		modelItems = append(modelItems, model.WatchHistoryItem{
 			ID:          item.ID,
@@ -130,9 +139,28 @@ func (h *SyncHandler) SyncHistory(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.service.SyncHistory(c.Context(), userID, modelItems); err != nil {
-		return response.InternalServerError(c, "Failed to sync history")
+	revision, err := h.service.SyncHistory(c.Context(), userID, modelItems, *req.Revision)
+	if err != nil {
+		return syncError(c, err)
 	}
 
-	return response.Success(c, fiber.Map{"status": "success"})
+	return response.OK(c, fiber.Map{"revision": revision})
+}
+
+func syncError(c *fiber.Ctx, err error) error {
+	if errors.Is(err, repository.ErrSyncConflict) {
+		return response.Conflict(c, err.Error())
+	}
+	if errors.Is(err, service.ErrInvalidSync) {
+		return response.BadRequest(c, err.Error())
+	}
+	return response.InternalError(c, "Failed to sync library")
+}
+
+func cloudText(value *string) *string {
+	if value == nil {
+		empty := ""
+		return &empty
+	}
+	return value
 }

@@ -60,7 +60,7 @@ export interface TorrentSearchResult {
   sizeBytes: number
   category: string
   added: string
-  provider: TorrentProviderName
+  provider: TorrentProviderName | 'StreamForge'
   qualityScore?: number
   fileIndex?: number
 }

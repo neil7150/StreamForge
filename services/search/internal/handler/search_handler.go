@@ -3,6 +3,9 @@ package handler
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
+	"streamforge.local/pkg/response"
+	"strings"
+	"unicode/utf8"
 
 	"streamforge/services/search/internal/dto"
 	"streamforge/services/search/internal/service"
@@ -23,17 +26,18 @@ func NewSearchHandler(searchService *service.SearchService, log zerolog.Logger) 
 func (h *SearchHandler) Search(c *fiber.Ctx) error {
 	var q dto.SearchQuery
 	if err := c.QueryParser(&q); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid query parameters"})
+		return response.BadRequest(c, "Invalid query parameters")
 	}
 
-	if q.Q == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Query string 'q' is required"})
+	q.Normalize()
+	if q.Q == "" || utf8.RuneCountInString(q.Q) > 200 {
+		return response.BadRequest(c, "Query must contain between 1 and 200 characters")
 	}
 
 	items, total, err := h.searchService.Search(c.Context(), q)
 	if err != nil {
 		h.log.Error().Err(err).Msg("Search failed")
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+		return response.InternalError(c, "Search is unavailable")
 	}
 
 	return c.JSON(fiber.Map{
@@ -47,15 +51,15 @@ func (h *SearchHandler) Search(c *fiber.Ctx) error {
 }
 
 func (h *SearchHandler) Suggest(c *fiber.Ctx) error {
-	q := c.Query("q")
-	if q == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Query string 'q' is required"})
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" || utf8.RuneCountInString(q) > 200 {
+		return response.BadRequest(c, "Query must contain between 1 and 200 characters")
 	}
 
 	items, err := h.searchService.Suggest(c.Context(), q)
 	if err != nil {
 		h.log.Error().Err(err).Msg("Suggest failed")
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+		return response.InternalError(c, "Suggestions are unavailable")
 	}
 
 	return c.JSON(fiber.Map{

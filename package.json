@@ -8,11 +8,17 @@
     "packages/*"
   ],
   "scripts": {
+    "package:backend:botkeep": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-botkeep.ps1",
     "validate:mobile": "node scripts/validate-mobile.mjs",
     "validate:mobile:native": "powershell -ExecutionPolicy Bypass -File apps/mobile/scripts/check-native-android.ps1",
+    "validate:backend:integration": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-backend-integration.ps1",
+    "setup:backend:test-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-backend-test-runtime.ps1",
     "dev": "npm run dev --workspace=apps/desktop",
     "build": "npm run build --workspace=apps/desktop",
     "test": "npm run test --workspace=apps/desktop",
-    "build:verify": "npm run build:verify --workspace=apps/desktop"
+    "build:verify": "npm run build:verify --workspace=apps/desktop",
+    "validate:deployment": "node scripts/validate-deployment.mjs",
+    "check:staging": "node scripts/check-staging.mjs",
+    "check:apk-readiness": "node --import ./scripts/register-typescript.mjs scripts/check-apk-readiness.mjs"
   }
 }

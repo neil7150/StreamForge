@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/go-playground/validator/v10"
@@ -61,7 +62,10 @@ func (h *ShowHandler) GetShow(c *fiber.Ctx) error {
 	show, err := h.svc.GetShow(c.Context(), slug)
 	if err != nil {
 		h.log.Error().Err(err).Str("slug", slug).Msg("Failed to get show")
-		return response.NotFound(c, "Show not found")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Show not found")
+		}
+		return response.InternalError(c, "Failed to fetch show")
 	}
 
 	return response.OK(c, dto.ToShowDetailResponse(show))
@@ -76,6 +80,9 @@ func (h *ShowHandler) GetSeasons(c *fiber.Ctx) error {
 	seasons, err := h.svc.GetSeasons(c.Context(), id)
 	if err != nil {
 		h.log.Error().Err(err).Str("show_id", id.String()).Msg("Failed to get seasons")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Content not found")
+		}
 		return response.InternalError(c, "Failed to fetch seasons")
 	}
 
@@ -96,6 +103,9 @@ func (h *ShowHandler) GetEpisodeMagnets(c *fiber.Ctx) error {
 	magnets, err := h.svc.GetEpisodeMagnets(c.Context(), id)
 	if err != nil {
 		h.log.Error().Err(err).Str("id", id.String()).Msg("Failed to get episode magnets")
+		if errors.Is(err, service.ErrNotFound) {
+			return response.NotFound(c, "Content not found")
+		}
 		return response.InternalError(c, "Failed to fetch magnets")
 	}
 
@@ -158,7 +168,7 @@ func (h *ShowHandler) UpdateShow(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
-	
+
 	firstAirDate, _ := parseOptionalDate(req.FirstAirDate)
 	lastAirDate, _ := parseOptionalDate(req.LastAirDate)
 
@@ -207,6 +217,9 @@ func (h *ShowHandler) CreateSeason(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
+	if req.SeasonNumber < 1 {
+		return response.BadRequest(c, "Season number must be positive")
+	}
 	req.ShowID = showID
 
 	result, err := h.svc.CreateSeason(c.Context(), req)
@@ -219,12 +232,18 @@ func (h *ShowHandler) CreateSeason(c *fiber.Ctx) error {
 }
 
 func (h *ShowHandler) CreateEpisode(c *fiber.Ctx) error {
-	var req dto.CreateEpisodeRequest 
+	var req dto.CreateEpisodeRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.BadRequest(c, "Invalid request body")
 	}
 
-	airDate, _ := parseOptionalDate(req.AirDate)
+	if err := h.validate.Struct(req); err != nil {
+		return response.BadRequest(c, "Invalid episode data")
+	}
+	airDate, err := parseOptionalDate(req.AirDate)
+	if err != nil {
+		return response.BadRequest(c, "Air date must use YYYY-MM-DD format")
+	}
 
 	episode := model.Episode{
 		SeasonID:       req.SeasonID,

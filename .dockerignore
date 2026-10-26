@@ -1,0 +1,17 @@
+# Only backend source and migrations belong in backend image build contexts.
+**
+!pkg/
+!pkg/**
+!services/
+!services/auth/
+!services/auth/**
+!services/content/
+!services/content/**
+!services/search/
+!services/search/**
+!services/user/
+!services/user/**
+**/.env
+**/.env.*
+**/tmp/
+**/*.exe

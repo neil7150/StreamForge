@@ -17,7 +17,7 @@ import { SearchBar } from '../components/ui/SearchBar'
 import { SourcePickerModal } from '../components/ui/SourcePickerModal'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { api } from '@streamforge/core/clients'
+import { mobileCatalog as catalog } from '../data/mobile-catalog'
 import { searchMovieTorrents } from '@streamforge/core/search'
 import { isValidMagnet, extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult } from '@streamforge/core/types'
@@ -73,13 +73,14 @@ export const SearchScreen = ({ navigation }: Props) => {
     setIsLoading(true)
     try {
       const [searchRes, suggestRes] = await Promise.allSettled([
-        api.search(text, 'all', 1, request.signal),
-        api.searchSuggest(text, request.signal)
+        catalog.search(text, 'all', 1, request.signal),
+        catalog.searchSuggest(text, request.signal)
       ])
       if (!request.isCurrent()) return
 
       if (searchRes.status === 'fulfilled' && searchRes.value?.data) {
         setResults(searchRes.value.data)
+        setSearchError(searchRes.value.warning)
       } else {
         setResults([])
         setSearchError('Search is unavailable. Check your connection and retry.')
@@ -124,6 +125,10 @@ export const SearchScreen = ({ navigation }: Props) => {
   }
 
   const handleScrapeTorrentSources = async (media: any) => {
+    if (media.type === 'show') {
+      navigation.navigate('SeriesDetail', { slug: media.slug, id: media.id })
+      return
+    }
     const request = sourceRequests.current.begin()
     setActiveMediaTitle(media.title)
     setActiveContentKey(media.id || media.slug ? `movie:${media.id || media.slug}` : undefined)
@@ -170,6 +175,7 @@ export const SearchScreen = ({ navigation }: Props) => {
       </View>
 
       {/* Magnet link direct stream banner */}
+      {searchError && results.length > 0 ? <Text style={{ color: colors.textSecondary, padding: 16 }}>{searchError}</Text> : null}
       {isMagnet && infoHash ? (
         <TouchableOpacity
           style={styles.magnetBanner}

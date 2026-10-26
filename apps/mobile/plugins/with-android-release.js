@@ -26,7 +26,26 @@ module.exports = function withAndroidRelease(config) {
   return withAppBuildGradle(config, result => {
     if (result.modResults.language !== 'groovy') throw new Error('Android release plugin expects Groovy Gradle')
     const marker = '// StreamForge release signing'
-    if (result.modResults.contents.includes(marker)) return result
+    const identityMarker = '// StreamForge release identity guard'
+    // Only this app's release packaging needs delivery credentials. Library
+    // release resources are also used by the standalone, test-signed variant.
+    result.modResults.contents = result.modResults.contents.replaceAll(
+      'graph.allTasks.any { task -> task.name ==~',
+      'graph.allTasks.any { task -> task.project == project && task.name ==~'
+    )
+    if (result.modResults.contents.includes(marker)) {
+      if (!result.modResults.contents.includes(identityMarker)) {
+        result.modResults.contents += `\n${identityMarker}
+gradle.taskGraph.whenReady { graph ->
+    def packagingRelease = graph.allTasks.any { task -> task.project == project && task.name ==~ /(?i)(assemble|bundle|package|install|validateSigning).*Release.*/ }
+    if (packagingRelease && (streamforgeKeyAlias == 'androiddebugkey' || (streamforgeKeyPath && file(streamforgeKeyPath).name == 'debug.keystore'))) {
+        throw new GradleException('Android debug signing identities are not allowed for delivery.')
+    }
+}
+`
+      }
+      return result
+    }
     result.modResults.contents += `
 ${marker}
 def streamforgeKeyPath = System.getenv('STREAMFORGE_KEYSTORE_PATH')
@@ -52,9 +71,13 @@ android {
     }
 }
 gradle.taskGraph.whenReady { graph ->
-    def packagingRelease = graph.allTasks.any { task -> task.name ==~ /(?i)(assemble|bundle|package|install|validateSigning).*Release.*/ }
+    def packagingRelease = graph.allTasks.any { task -> task.project == project && task.name ==~ /(?i)(assemble|bundle|package|install|validateSigning).*Release.*/ }
     if (packagingRelease && !streamforgeHasSigning) {
         throw new GradleException('Release signing variables are missing. Debug signing is not allowed for delivery.')
+    }
+    ${identityMarker}
+    if (packagingRelease && (streamforgeKeyAlias == 'androiddebugkey' || (streamforgeKeyPath && file(streamforgeKeyPath).name == 'debug.keystore'))) {
+        throw new GradleException('Android debug signing identities are not allowed for delivery.')
     }
 }
 `

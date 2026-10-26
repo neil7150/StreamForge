@@ -15,7 +15,7 @@ import type { RootStackParamList, MainTabParamList } from '../navigation/types'
 import { MediaCard } from '../components/ui/MediaCard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { api } from '@streamforge/core/clients'
+import { mobileCatalog as catalog } from '../data/mobile-catalog'
 import { RequestGate } from '../data/request-gate'
 
 type Props = CompositeScreenProps<
@@ -50,13 +50,13 @@ export const BrowseScreen = ({ navigation, route }: Props) => {
       else setLoadingMore(true)
 
       if (selectedType === 'movie') {
-        const res = await api.getMovies(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
+        const res = await catalog.getMovies(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
         if (!request.isCurrent()) return
         const newItems = res?.data || []
         setItems(append ? (prev) => [...prev, ...newItems].slice(0, 480) : newItems)
         setHasMore(newItems.length >= 24 && pageNum < 20)
       } else {
-        const res = await api.getShows(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
+        const res = await catalog.getShows(pageNum, 24, selectedGenre === 'all' ? undefined : selectedGenre, request.signal)
         if (!request.isCurrent()) return
         const newItems = res?.data || []
         setItems(append ? (prev) => [...prev, ...newItems].slice(0, 480) : newItems)
@@ -79,7 +79,7 @@ export const BrowseScreen = ({ navigation, route }: Props) => {
   }, [loadData])
 
   useEffect(() => {
-    api.getGenres().then((res) => {
+    catalog.getGenres().then((res) => {
       if (res?.data?.length) {
         setGenres([{ id: 'all', name: 'All', slug: 'all' }, ...res.data])
       }

@@ -1,10 +1,10 @@
 package dto
 
 import (
-	"streamforge/services/user/internal/model"
 	"encoding/json"
-	"time"
 	"github.com/google/uuid"
+	"streamforge/services/user/internal/model"
+	"time"
 )
 
 type ProfileResponse struct {
@@ -28,9 +28,11 @@ func ToProfileResponse(p *model.UserProfile) ProfileResponse {
 }
 
 type WatchlistResponse struct {
-	Items []WatchlistItemDTO `json:"items"`
+	Items    []WatchlistItemDTO `json:"items"`
+	Revision int64              `json:"revision"`
 }
 
 type HistoryResponse struct {
-	Items []HistoryItemDTO `json:"items"`
+	Items    []HistoryItemDTO `json:"items"`
+	Revision int64            `json:"revision"`
 }

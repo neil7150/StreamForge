@@ -108,7 +108,7 @@ func (r *MovieRepository) List(ctx context.Context, page, perPage int, genreSlug
 	offset := (page - 1) * perPage
 	args = append(args, perPage, offset)
 
-	query := fmt.Sprintf(`SELECT %s FROM movies m %s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
+	query := fmt.Sprintf(`SELECT %s FROM movies m %s ORDER BY %s %s, m.id ASC LIMIT $%d OFFSET $%d`,
 		movieColumns, where, sortCol, orderDir, argIdx, argIdx+1,
 	)
 
@@ -128,7 +128,7 @@ func (r *MovieRepository) List(ctx context.Context, page, perPage int, genreSlug
 
 // GetBySlug returns a single movie by its slug.
 func (r *MovieRepository) GetBySlug(ctx context.Context, slug string) (model.Movie, error) {
-	query := fmt.Sprintf("SELECT %s FROM movies m WHERE m.slug = $1", movieColumns)
+	query := fmt.Sprintf("SELECT %s FROM movies m WHERE m.slug = $1 AND m.status = 'active'", movieColumns)
 	m, err := scanMovie(r.db.QueryRow(ctx, query, slug))
 	if err != nil {
 		return m, fmt.Errorf("get movie by slug: %w", err)

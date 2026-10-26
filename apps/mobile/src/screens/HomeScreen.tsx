@@ -18,7 +18,7 @@ import type { RootStackParamList, MainTabParamList } from '../navigation/types'
 import { MediaCard } from '../components/ui/MediaCard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { api } from '@streamforge/core/clients'
+import { mobileCatalog as catalog } from '../data/mobile-catalog'
 import { useUserDataStore } from '@streamforge/core/stores'
 import { formatResumeTime } from '@streamforge/core/policies'
 
@@ -43,19 +43,9 @@ export const HomeScreen = ({ navigation }: Props) => {
   const loadContent = useCallback(async () => {
     setLoadError(null)
     try {
-      const [trendRes, recentRes] = await Promise.allSettled([
-        api.getTrendingMovies(15),
-        api.getRecentMovies(15)
-      ])
-
-      const trendData = trendRes.status === 'fulfilled' && trendRes.value?.data ? trendRes.value.data : []
-      const recentData = recentRes.status === 'fulfilled' && recentRes.value?.data ? recentRes.value.data : []
-      if (trendRes.status === 'rejected' || recentRes.status === 'rejected') {
-        setLoadError('Some titles could not be loaded. Check your connection and try again.')
-      }
-
-      setTrending(trendData)
-      setRecent(recentData)
+      const response = await catalog.getPopularMovies()
+      setTrending(response.data.slice(0, 15))
+      setRecent(response.data.slice(15, 30))
     } catch {
       setLoadError('Titles could not be loaded. Please try again.')
     } finally {
@@ -226,7 +216,7 @@ export const HomeScreen = ({ navigation }: Props) => {
 
       {/* Trending Now */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Trending Now</Text>
+        <Text style={styles.sectionTitle}>Popular Movies</Text>
         <FlatList
           data={trending}
           horizontal
@@ -247,7 +237,7 @@ export const HomeScreen = ({ navigation }: Props) => {
 
       {/* Recent Releases */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Recent Releases</Text>
+        <Text style={styles.sectionTitle}>More Movies</Text>
         <FlatList
           data={recent}
           horizontal

@@ -4,6 +4,8 @@
  * Callers render unavailable states when the backend cannot be reached.
  */
 
+import type { CloudWatchlistItem, CloudHistoryItem, LibrarySnapshot } from './library-contract'
+
 function resolveDefaultAPIBase(): string {
   try {
     if (typeof process !== 'undefined' && process.env) {
@@ -19,13 +21,29 @@ const API_BASE = resolveDefaultAPIBase()
 interface RequestOptions {
   method?: string
   body?: unknown
-  token?: string
+  token?: string | null
   signal?: AbortSignal
 }
 
 export class APIClient {
   private baseURL: string
   private token: string | null = null
+  private refreshSession: (() => Promise<boolean>) | null = null
+  private sessionIdentity: () => unknown = () => null
+  private refreshFlight: { identity: unknown; promise: Promise<boolean> } | null = null
+
+  configureAuthRefresh(refresh: () => Promise<boolean>, identity: () => unknown): void {
+    this.refreshSession = refresh
+    this.sessionIdentity = identity
+  }
+
+  private renew(identity: unknown): Promise<boolean> {
+    if (this.refreshFlight && this.refreshFlight.identity === identity) return this.refreshFlight.promise
+    const flight = { identity, promise: Promise.resolve().then(() => identity === this.sessionIdentity() ? this.refreshSession!() : false) }
+    this.refreshFlight = flight
+    void flight.promise.finally(() => { if (this.refreshFlight === flight) this.refreshFlight = null }).catch(() => {})
+    return flight.promise
+  }
 
   constructor(baseURL: string) {
     this.baseURL = baseURL
@@ -44,11 +62,31 @@ export class APIClient {
   }
 
   async request<T = any>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    if (!this.baseURL) {
+    const identity = this.sessionIdentity()
+    const token = options.token === undefined ? this.token : options.token
+    const baseURL = this.baseURL
+    try {
+      return await this.send<T>(baseURL, endpoint, { ...options, token })
+    } catch (error) {
+      const status = (error as { status?: number }).status
+      const mayRefresh = status === 401 && token && options.token === undefined && this.refreshSession
+        && !/^\/auth\/(login|register|refresh|logout|oauth)(\/|$)/.test(endpoint)
+        && !options.signal?.aborted && identity === this.sessionIdentity() && baseURL === this.baseURL
+      if (!mayRefresh) throw error
+      // A simultaneous request may already have refreshed this same account.
+      const refreshed = this.token !== token || await this.renew(identity)
+      if (!refreshed || identity !== this.sessionIdentity() || baseURL !== this.baseURL || options.signal?.aborted) throw error
+      // Exactly one retry. Never replay an old account's payload under a new login.
+      return this.send<T>(baseURL, endpoint, { ...options, token: this.token })
+    }
+  }
+
+  private async send<T>(baseURL: string, endpoint: string, options: RequestOptions): Promise<T> {
+    if (!baseURL) {
       throw new Error('The StreamForge backend endpoint is not configured for this build.')
     }
     const { method = 'GET', body, token } = options
-    const authToken = token || this.token
+    const authToken = token
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
@@ -63,7 +101,7 @@ export class APIClient {
     options.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(abort, 15_000)
     try {
-      const res = await fetch(`${this.baseURL}${endpoint}`, {
+      const res = await fetch(`${baseURL}${endpoint}`, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
@@ -162,8 +200,12 @@ export class APIClient {
     return this.request(`/api/v1/shows?${params}`, { signal })
   }
 
-  async getShow(slug: string) {
-    return this.request(`/api/v1/shows/${slug}`)
+  async getShow(slug: string, signal?: AbortSignal) {
+    return this.request(`/api/v1/shows/${slug}`, { signal })
+  }
+
+  async getEpisodeMagnets(id: string, signal?: AbortSignal) {
+    return this.request(`/api/v1/episodes/${encodeURIComponent(id)}/magnets`, { signal })
   }
 
   async getRecentMovies(limit = 20) {
@@ -178,8 +220,8 @@ export class APIClient {
     return this.getMovie(slug, signal)
   }
 
-  async getShowBySlug(slug: string) {
-    return this.getShow(slug)
+  async getShowBySlug(slug: string, signal?: AbortSignal) {
+    return this.getShow(slug, signal)
   }
 
   // ── Admin Content Management ─────────────────
@@ -285,19 +327,19 @@ export class APIClient {
   }
 
   async getCloudWatchlist() {
-    return this.request<{ data: any[] }>('/api/v1/sync/watchlist')
+    return this.request<{ data: LibrarySnapshot<CloudWatchlistItem> }>('/api/v1/sync/watchlist')
   }
 
-  async syncWatchlist(items: any[]) {
-    return this.request('/api/v1/sync/watchlist', { method: 'PUT', body: { items } })
+  async syncWatchlist(items: CloudWatchlistItem[], revision: number) {
+    return this.request<{ data: { revision: number } }>('/api/v1/sync/watchlist', { method: 'PUT', body: { items, revision } })
   }
 
   async getCloudHistory() {
-    return this.request<{ data: any[] }>('/api/v1/sync/history')
+    return this.request<{ data: LibrarySnapshot<CloudHistoryItem> }>('/api/v1/sync/history')
   }
 
-  async syncHistory(items: any[]) {
-    return this.request('/api/v1/sync/history', { method: 'PUT', body: { items } })
+  async syncHistory(items: CloudHistoryItem[], revision: number) {
+    return this.request<{ data: { revision: number } }>('/api/v1/sync/history', { method: 'PUT', body: { items, revision } })
   }
 
   // ── Search ───────────────────────────────────────

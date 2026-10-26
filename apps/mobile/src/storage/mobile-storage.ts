@@ -1,10 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SecureStore from 'expo-secure-store'
-import { setStorageAdapter, useAuthStore, usePlaybackSettingsStore, useUserDataStore } from '@streamforge/core/stores'
+import { setStorageAdapter, disableAccountsForLocalUse, usePlaybackSettingsStore, useUserDataStore } from '@streamforge/core/stores'
 import { HydratedStorage } from './hydrated-storage'
 
-import { createMobileBacking, createMobileAdapter, SETTINGS_KEY, SESSION_RECORD_KEY } from './mobile-backing'
-let account: string | null = null
+import { createMobileBacking, createMobileAdapter, SETTINGS_KEY } from './mobile-backing'
+disableAccountsForLocalUse()
 let errorHandler: (message: string | null) => void = () => {}
 
 export function onStorageError(handler: typeof errorHandler) { errorHandler = handler }
@@ -18,19 +18,11 @@ const mirror = new HydratedStorage(createMobileBacking(AsyncStorage, {
 let initialization: Promise<void> | null = null
 export function initializeMobileStorage(): Promise<void> {
   if (!initialization) initialization = (async () => {
-    const keys = (await AsyncStorage.getAllKeys()).filter(key => key.startsWith('streamforge.'))
-    await mirror.hydrate([...new Set([...keys, SESSION_RECORD_KEY, SETTINGS_KEY])])
-    setStorageAdapter(createMobileAdapter(mirror, () => account))
+    const keys = (await AsyncStorage.getAllKeys()).filter(key => key.startsWith('streamforge.library.v1.guest.'))
+    await mirror.hydrate([...new Set([...keys, SETTINGS_KEY])])
+    setStorageAdapter(createMobileAdapter(mirror, () => null))
     usePlaybackSettingsStore.getState().hydrate()
-    const updateAccount = () => {
-      account = useAuthStore.getState().user?.id ?? null
-      useUserDataStore.getState()._loadFromStorage()
-    }
-    useAuthStore.subscribe((state, previous) => {
-      if (state.user?.id !== previous.user?.id) updateAccount()
-    })
-    useAuthStore.getState().loadSession()
-    updateAccount()
+    useUserDataStore.getState()._loadFromStorage()
   })().catch(error => { initialization = null; throw error })
   return initialization
 }
