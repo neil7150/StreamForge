@@ -1,5 +1,12 @@
 # Android phone test package — 25 October 2026
 
+**New test APK ready — 26 October:** `1.0.1-test` (version code 2) contains the
+search/player improvements. It uses the same test app identity and signing
+certificate, and can update the existing installation. Follow
+[the new APK installation and phone checklist](android-test-update-2026-10-26.md).
+The earlier "not in the installed APK" source checkpoint below is historical;
+the user has not yet tested this new APK.
+
 Latest source update, 26 October: the user reported the first APK runs and plays
 smoothly after startup. Search/player follow-up changes are now implemented and
 source/native-library checked, but are not in that installed APK. Follow

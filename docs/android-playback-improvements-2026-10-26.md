@@ -1,5 +1,11 @@
 # Android search and playback improvements
 
+**Later build checkpoint:** the user authorized the GitHub update followed by a
+new test APK. `1.0.1-test` was built from pushed commit `13dcbb9` and passed
+artifact verification. See [the APK checksum and phone tests](android-test-update-2026-10-26.md).
+Earlier no-new-APK statements below describe the implementation checkpoint;
+physical verification of this updated APK remains pending.
+
 Implemented locally after the first standalone APK phone test. The user reported
 that the existing APK launches and plays smoothly after a slow start. This is
 user-reported baseline evidence, not a pass for every device checklist item.

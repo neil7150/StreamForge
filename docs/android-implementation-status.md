@@ -1,5 +1,16 @@
 # Android implementation checkpoint — 20 October 2026
 
+## Search/player APK delivered — 26 October 2026
+
+The user subsequently authorized the GitHub update and new test build. Source
+commit `13dcbb9` was verified on `origin/main` before building. The standalone
+ARM64 `1.0.1-test` APK (version code 2) built successfully and passed artifact,
+update-signature, permission, native code/data, JNI and 16 KiB alignment checks.
+The new file is 52,510,469 bytes; the prior APK is preserved. This update has not
+yet been phone-tested. See
+[artifact checksum, update instructions and phone checks](android-test-update-2026-10-26.md).
+This supersedes the earlier source-only/no-new-APK checkpoint immediately below.
+
 ## Search/player follow-up — 26 October 2026 (current source)
 
 The user reported successful launch/playback of the first standalone test APK,
