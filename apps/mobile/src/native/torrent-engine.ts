@@ -52,6 +52,7 @@ type NativeTorrentStats = {
   peers?: number
   downloaded?: number
   totalSize?: number
+  firstVideoByteMs?: number
   bufferProgress?: number
   error?: string
 }
@@ -102,6 +103,7 @@ const emitProgress = (infoHash: string, stats: NativeTorrentStats) => {
     timeRemaining: downloadSpeed > 0 ? remainingBytes / downloadSpeed : 0,
     ratio: 0,
     bufferProgress: stats.bufferProgress ?? 0,
+    firstVideoByteMs: stats.firstVideoByteMs ?? 0,
     mode: 'stream',
     peerConnections: {
       discovered: connectedPeers,

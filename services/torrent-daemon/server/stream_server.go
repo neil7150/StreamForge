@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,7 @@ func NewStreamServer(source StreamSource, port int) *StreamServer {
 	s := &StreamServer{engine: source, port: port}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", s.handleStream)
+	mux.HandleFunc("/subtitle/", s.handleSubtitle)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -96,4 +98,52 @@ func (s *StreamServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, name, time.Time{}, reader)
+}
+
+type subtitleSource interface {
+	OpenSubtitleReader(string, int, context.Context) (io.ReadSeekCloser, int64, string, error)
+}
+
+func (s *StreamServer) handleSubtitle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/subtitle/")
+	token := s.engine.SessionToken(id)
+	if id == "" || strings.Contains(id, "/") || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(r.URL.Query().Get("token"))) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	index, err := strconv.Atoi(r.URL.Query().Get("index"))
+	source, ok := s.engine.(subtitleSource)
+	if err != nil || index < 0 || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	reader, size, _, err := source.OpenSubtitleReader(id, index, ctx)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer reader.Close()
+	if size <= 0 || size > 2<<20 {
+		http.Error(w, "Subtitle too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, (2<<20)+1))
+	if err != nil {
+		http.Error(w, "Subtitle unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if len(data) > 2<<20 {
+		http.Error(w, "Subtitle too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write(data)
 }

@@ -89,7 +89,7 @@ export const SourcePickerModal: React.FC<SourcePickerModalProps> = ({
                       <View style={styles.statItem}>
                         <Users size={12} color={colors.success} />
                         <Text style={[styles.statText, { color: colors.success }]}>
-                          {item.seeders} seeds
+                          {item.seeders} reported seeders
                         </Text>
                       </View>
                     </View>

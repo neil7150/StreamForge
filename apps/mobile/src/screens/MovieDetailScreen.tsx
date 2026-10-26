@@ -288,7 +288,7 @@ export const MovieDetailScreen = ({ navigation, route }: Props) => {
           <Text style={styles.sectionHeader}>Torrent Sources</Text>
           <Text style={styles.sourcesCountText}>
             {sources.length > 0
-              ? `${sources.length} sources available. Top source has ${sources[0].seeders} seeds.`
+              ? `${sources.length} sources available. Top source reports ${sources[0].seeders} seeders.`
               : isSearchingSources
               ? 'Searching torrent indexers...'
               : 'Tap Choose Source to search torrent providers.'}

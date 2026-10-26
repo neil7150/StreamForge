@@ -204,6 +204,7 @@ export interface MovieDetails extends MovieSummary {
 }
 
 export interface TorrentProgress {
+  firstVideoByteMs?: number
   infoHash: string
   progress: number
   downloadSpeed: number

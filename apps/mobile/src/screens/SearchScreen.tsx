@@ -2,22 +2,23 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
-  FlatList,
+  SectionList,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
   Keyboard
 } from 'react-native'
-import { Magnet, Play, Film, Tv } from 'lucide-react-native'
+import { Magnet, Play } from 'lucide-react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import type { CompositeScreenProps } from '@react-navigation/native'
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs'
 import type { RootStackParamList, MainTabParamList } from '../navigation/types'
+import { Poster } from '../components/ui/Poster'
 import { SearchBar } from '../components/ui/SearchBar'
 import { SourcePickerModal } from '../components/ui/SourcePickerModal'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
-import { mobileCatalog as catalog } from '../data/mobile-catalog'
+import { mobileCatalog as catalog, searchSections, type MobileCatalogItem } from '../data/mobile-catalog'
 import { searchMovieTorrents } from '@streamforge/core/search'
 import { isValidMagnet, extractInfoHash } from '@streamforge/core/utils'
 import type { TorrentSearchResult } from '@streamforge/core/types'
@@ -33,7 +34,7 @@ type Props = CompositeScreenProps<
 export const SearchScreen = ({ navigation }: Props) => {
   const insets = useSafeAreaInsets()
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<any[]>([])
+  const [results, setResults] = useState<MobileCatalogItem[]>([])
   const [suggestions, setSuggestions] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isSearchingTorrents, setIsSearchingTorrents] = useState(false)
@@ -41,6 +42,7 @@ export const SearchScreen = ({ navigation }: Props) => {
   // Torrent source picker modal
   const [modalVisible, setModalVisible] = useState(false)
   const [activeMediaTitle, setActiveMediaTitle] = useState('')
+  const [activePoster, setActivePoster] = useState<string | null>(null)
   const [activeContentKey, setActiveContentKey] = useState<string | undefined>()
   const [searchError, setSearchError] = useState<string | null>(null)
   const [torrentSources, setTorrentSources] = useState<TorrentSearchResult[]>([])
@@ -72,23 +74,11 @@ export const SearchScreen = ({ navigation }: Props) => {
 
     setIsLoading(true)
     try {
-      const [searchRes, suggestRes] = await Promise.allSettled([
-        catalog.search(text, 'all', 1, request.signal),
-        catalog.searchSuggest(text, request.signal)
-      ])
+      const response = await catalog.search(text, 'all', 1, request.signal)
       if (!request.isCurrent()) return
-
-      if (searchRes.status === 'fulfilled' && searchRes.value?.data) {
-        setResults(searchRes.value.data)
-        setSearchError(searchRes.value.warning)
-      } else {
-        setResults([])
-        setSearchError('Search is unavailable. Check your connection and retry.')
-      }
-
-      if (suggestRes.status === 'fulfilled' && suggestRes.value?.data) {
-        setSuggestions(suggestRes.value.data)
-      } else setSuggestions([])
+      setResults(response.data)
+      setSearchError(response.warning)
+      setSuggestions(response.data.slice(0, 6))
     } catch {
       if (request.isCurrent()) { setResults([]); setSearchError('Search is unavailable. Please retry.') }
     } finally {
@@ -131,6 +121,7 @@ export const SearchScreen = ({ navigation }: Props) => {
     }
     const request = sourceRequests.current.begin()
     setActiveMediaTitle(media.title)
+    setActivePoster(media.poster_url || media.posterUrl || null)
     setActiveContentKey(media.id || media.slug ? `movie:${media.id || media.slug}` : undefined)
     setTorrentSources([])
     setModalVisible(true)
@@ -158,6 +149,7 @@ export const SearchScreen = ({ navigation }: Props) => {
         infoHash: hash,
         contentKey: activeContentKey,
         title: activeMediaTitle || source.name,
+        posterUrl: activePoster,
         magnetURI: source.magnetURI,
         fileIndex: source.fileIndex
       })
@@ -218,9 +210,11 @@ export const SearchScreen = ({ navigation }: Props) => {
           <Text style={styles.searchingText}>Searching catalog...</Text>
         </View>
       ) : (
-        <FlatList
-          data={results}
-          keyExtractor={(item: any) => String(item.id || item.slug)}
+        <SectionList
+          sections={searchSections(results)}
+          stickySectionHeadersEnabled={false}
+          renderSectionHeader={({ section }) => <Text accessibilityRole="header" style={{ color: colors.text, fontSize: 20, fontWeight: '700', paddingVertical: 14 }}>{section.title} ({section.data.length})</Text>}
+          keyExtractor={(item: any) => `${item.type}:${item.id || item.slug}`}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
             query.length >= 2 && !isMagnet ? (
@@ -250,23 +244,18 @@ export const SearchScreen = ({ navigation }: Props) => {
               }}
               activeOpacity={0.7}
             >
-              <View style={styles.mediaIconBox}>
-                {item.type === 'show' ? (
-                  <Tv size={20} color={colors.primary} />
-                ) : (
-                  <Film size={20} color={colors.accent} />
-                )}
-              </View>
+              <Poster uri={item.poster_url || item.posterUrl} title={item.title} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.resultTitle}>{item.title}</Text>
                 <Text style={styles.resultMeta}>
                   {item.type === 'show' ? 'TV Series' : 'Movie'}
-                  {item.release_date ? ` • ${new Date(item.release_date).getFullYear()}` : ''}
+                  {item.year ? ` • ${item.year}` : ''}
                   {item.avg_rating ? ` • ★ ${Number(item.avg_rating).toFixed(1)}` : ''}
                 </Text>
               </View>
               <TouchableOpacity
                 style={styles.streamIconBtn}
+                accessibilityRole="button" accessibilityLabel={`Choose a source for ${item.title}`}
                 onPress={() => handleScrapeTorrentSources(item)}
               >
                 <Play size={16} color="#ffffff" fill="#ffffff" />
@@ -391,8 +380,8 @@ const styles = StyleSheet.create({
     marginTop: 3
   },
   streamIconBtn: {
-    width: 34,
-    height: 34,
+    width: 48,
+    height: 48,
     borderRadius: 17,
     backgroundColor: colors.primary,
     justifyContent: 'center',

@@ -119,17 +119,42 @@ func TestLocalTorrentStreamsBeyondCacheAndSeeksBack(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	session := &streamSession{ctx: ctx, cancel: cancel, torrent: leecher,
+	session := &streamSession{ctx: ctx, cancel: cancel, torrent: leecher, started: time.Now(),
 		info: SessionInfo{Ready: true, SelectedFileIndex: 0}, readers: make(map[*sessionReader]struct{})}
 	engine.sessions["fixture"] = session
 	cache.onFailure = cancel
 	go engine.refreshEvictedPieces("fixture", session)
 	leecher.AddClientPeer(seeder)
+	if reader, _, _, err := engine.OpenSubtitleReader("fixture", 0, ctx); err == nil {
+		reader.Close()
+		t.Fatal("video exposed as a subtitle")
+	}
 	reader, size, _, err := engine.OpenReader("fixture", ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reader.Close()
+	// Probe a cold container's header and tail before streaming its body. These
+	// demands must reprioritize pieces rather than wait for the whole file.
+	probeStarted := time.Now()
+	probeBytes := make([]byte, 32<<10)
+	if _, err := io.ReadFull(reader, probeBytes); err != nil || !bytes.Equal(probeBytes, block[:len(probeBytes)]) {
+		t.Fatalf("cold header probe failed: %v", err)
+	}
+	if _, err := reader.Seek(size-int64(len(probeBytes)), io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(reader, probeBytes); err != nil || !bytes.Equal(probeBytes, block[len(block)-len(probeBytes):]) {
+		t.Fatalf("cold tail probe failed: %v", err)
+	}
+	t.Logf("cold verified header/tail probes: %s", time.Since(probeStarted))
+	stats, err := engine.GetStats("fixture")
+	if err != nil || stats.FirstVideoByteMs <= 0 {
+		t.Fatalf("first-video-byte diagnostic missing: %v", err)
+	}
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
 	actual := sha256.New()
 	if copied, err := io.Copy(actual, reader); err != nil || copied != size {
 		t.Fatalf("streamed %d/%d bytes: %v (cache: %v)", copied, size, err, cache.Failure())

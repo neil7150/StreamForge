@@ -1,5 +1,12 @@
 # Android phone test package — 25 October 2026
 
+Latest source update, 26 October: the user reported the first APK runs and plays
+smoothly after startup. Search/player follow-up changes are now implemented and
+source/native-library checked, but are not in that installed APK. Follow
+[the new search/player test list](android-playback-improvements-2026-10-26.md#next-phone-checks-after-separate-apk-authorization)
+only after a separately authorized new APK. No USB setup is needed for basic
+functional checks. Older readiness statements below describe earlier checkpoints.
+
 26 October update: the user authorized a standalone test APK after GitHub push.
 It has now been built and artifact-verified; see
 [the exact APK/checksum and installation steps](android-test-build-2026-10-26.md).

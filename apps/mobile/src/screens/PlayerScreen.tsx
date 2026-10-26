@@ -8,6 +8,7 @@ import {
   StatusBar,
   AppState,
   Modal,
+  ScrollView,
   FlatList
 } from 'react-native'
 import * as ScreenOrientation from 'expo-screen-orientation'
@@ -26,14 +27,9 @@ import type { RootStackParamList } from '../navigation/types'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../theme/colors'
 import { useUserDataStore, usePlaybackSettingsStore, getAuthGeneration } from '@streamforge/core/stores'
-import {
-  parseSubtitles,
-  findActiveSubtitleCue,
-  type SubtitleCue
-} from '@streamforge/core/policies'
 import { formatDuration } from '@streamforge/core/utils'
-import { openSubtitlesClient } from '@streamforge/core/clients'
-import type { OnlineSubtitleResult } from '@streamforge/core/types'
+import { TrackControls } from '../components/player/TrackControls'
+import { SeekBar } from '../components/player/SeekBar'
 import { mobileTorrentAPI, beginMobilePlayback, selectMobileFile } from '../native/torrent-engine'
 import type { PlaybackAttempt, SessionInfo } from '../playback/session-manager'
 import { flushMobileStorage } from '../storage/mobile-storage'
@@ -90,12 +86,18 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const [currentTime, setCurrentTime] = useState(initialTime || 0)
   const [duration, setDuration] = useState(initialDuration || 0)
   const [showControls, setShowControls] = useState(true)
-  const [trackWidth, setTrackWidth] = useState(0)
-  const [subtitles, setSubtitles] = useState<SubtitleCue[]>([])
-  const [activeCue, setActiveCue] = useState<string | null>(null)
+  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [fitMenu, setFitMenu] = useState(false)
+  const [infoMenu, setInfoMenu] = useState(false)
+  const interactionRef = useRef(false)
+  const [startupStage, setStartupStage] = useState('Discovering torrent metadata…')
+  const startedAt = useRef(0)
+  const [diagnostics, setDiagnostics] = useState({ metadataMs: 0, sourceMs: 0, firstFrameMs: 0, bufferingCount: 0 })
+  const firstFrame = useRef(false)
   const [streamInfo, setStreamInfo] = useState({
+    firstVideoByteMs: 0,
     peers: 0,
-    speed: '0.0 MB/s',
+    speed: '0.0 MiB/s',
     buffered: 0
   })
   const [isBuffering, setIsBuffering] = useState(true)
@@ -110,8 +112,6 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
   const addToHistory = useUserDataStore((s) => s.addToHistory)
   const playbackSettings = usePlaybackSettingsStore()
-  const openSubtitlesApiKey = playbackSettings.openSubtitlesApiKey
-  const preferredSubtitleLanguage = playbackSettings.preferredSubtitleLanguage
 
   // 1. Initialize native video player via expo-video
   const player = useVideoPlayer(null, (p) => {
@@ -125,6 +125,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const syncReadyState = useCallback(() => {
     if (player.status !== 'readyToPlay') return
     setIsBuffering(false)
+    setDiagnostics(value => ({ ...value, sourceMs: value.sourceMs || Date.now() - startedAt.current }))
     if (player.duration > 0) {
       durationRef.current = player.duration
       setDuration(player.duration)
@@ -150,7 +151,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
   }, [])
 
   useEffect(() => {
-    if (!isBuffering) return
+    if (!isBuffering || fileChoice) return
     const timeout = setTimeout(() => {
       player.pause()
       setPlaybackError('The stream did not provide video data. Retry or choose another source.')
@@ -158,7 +159,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
       void attemptRef.current?.close().catch(() => {})
     }, 60_000)
     return () => clearTimeout(timeout)
-  }, [isBuffering, player, retryNonce])
+  }, [isBuffering, player, retryNonce, fileChoice])
 
   // A unique attempt owns setup and cleanup, including retries of the same URL.
   useEffect(() => {
@@ -166,6 +167,11 @@ const PlayerContent = ({ navigation, route }: Props) => {
     let attempt: PlaybackAttempt | null = null
     sourceActiveRef.current = false
     sourceOwnerRef.current = null
+    startedAt.current = Date.now(); firstFrame.current = false
+    setStreamInfo({ firstVideoByteMs: 0, peers: 0, speed: '0.0 MiB/s', buffered: 0 })
+    setDiagnostics({ metadataMs: 0, sourceMs: 0, firstFrameMs: 0, bufferingCount: 0 })
+    setStartupStage(isDirectStream ? 'Opening video…' : 'Discovering torrent metadata…')
+    setSession(null)
     setPlaybackError(null)
     setFileChoice(null)
     setIsBuffering(true)
@@ -173,6 +179,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
     const load = async (url: string) => {
       sourceOwnerRef.current = attempt
+      setStartupStage('Fetching video data and preparing playback…')
       await player.replaceAsync(url)
       if (!active) return
       sourceActiveRef.current = true
@@ -192,6 +199,8 @@ const PlayerContent = ({ navigation, route }: Props) => {
         attemptRef.current = attempt
         const info = await attempt.result
         if (!active) return
+        setSession(info)
+        setDiagnostics(value => ({ ...value, metadataMs: Date.now() - startedAt.current }))
         if (info.requiresFileSelection) {
           setIsBuffering(false)
           setFileChoice(info)
@@ -211,7 +220,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
     })
     const progress = mobileTorrentAPI.onTorrentProgress(data => {
       if (active && data.infoHash === infoHash) setStreamInfo({
-        peers: data.numPeers, speed: `${(data.downloadSpeed / (1024 * 1024)).toFixed(1)} MB/s`, buffered: data.progress
+        firstVideoByteMs: data.firstVideoByteMs ?? 0, peers: data.numPeers, speed: `${(data.downloadSpeed / (1024 * 1024)).toFixed(1)} MiB/s`, buffered: data.progress
       })
     })
     const errors = mobileTorrentAPI.onTorrentError(data => {
@@ -238,21 +247,6 @@ const PlayerContent = ({ navigation, route }: Props) => {
     }
   }, [infoHash, magnetURI, isDirectStream, initialStreamURL, seasonNumber, episodeNumber, retryNonce, player, syncReadyState])
 
-  // Subtitle changes do not restart the torrent session.
-  useEffect(() => {
-    let active = true
-    setSubtitles([])
-    if (playbackSettings.subtitleMode !== 'off' && openSubtitlesApiKey) {
-      void openSubtitlesClient.searchOnlineSubtitles({ apiKey: openSubtitlesApiKey, query: title, language: preferredSubtitleLanguage || 'eng' })
-        .then(async (results: OnlineSubtitleResult[]) => {
-          if (!active || !results.length) return
-          const text = await openSubtitlesClient.downloadOnlineSubtitle(openSubtitlesApiKey, results[0].fileId)
-          if (active) setSubtitles(parseSubtitles(text))
-        }).catch(() => {})
-    }
-    return () => { active = false }
-  }, [title, openSubtitlesApiKey, preferredSubtitleLanguage, playbackSettings.subtitleMode])
-
   const chooseVideoFile = async (index: number) => {
     const attempt = attemptRef.current
     if (!attempt || !fileChoice) return
@@ -261,6 +255,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
     try {
       const info = await selectMobileFile(attempt.id, index)
       if (attemptRef.current !== attempt) return
+      setSession(info)
       selectedFileRef.current = index
       sourceOwnerRef.current = attempt
       sourceActiveRef.current = false
@@ -289,8 +284,10 @@ const PlayerContent = ({ navigation, route }: Props) => {
     const subStatus = player.addListener('statusChange', (event) => {
       if (!acceptsPlayerStatus(sourceActiveRef.current, event.status, player.status)) return
       if (event.status === 'loading') {
+        if (firstFrame.current) { setStartupStage('Buffering video…'); setDiagnostics(value => ({ ...value, bufferingCount: value.bufferingCount + 1 })) }
         setIsBuffering(true)
       } else if (event.status === 'readyToPlay') {
+        setDiagnostics(value => ({ ...value, sourceMs: value.sourceMs || Date.now() - startedAt.current }))
         syncReadyState()
       } else if (event.status === 'error') {
         setPlaybackError('The video player could not open this stream.')
@@ -316,16 +313,6 @@ const PlayerContent = ({ navigation, route }: Props) => {
       subTime.remove()
     }
   }, [player, syncReadyState])
-
-  // 6. Subtitle cue synchronizer
-  useEffect(() => {
-    if (subtitles.length === 0) {
-      setActiveCue(null)
-      return
-    }
-    const cue = findActiveSubtitleCue(subtitles, currentTime, 0)
-    setActiveCue(cue ? cue.text : null)
-  }, [currentTime, subtitles])
 
   // 7. Save watch progress to history
   const saveProgress = useCallback(() => {
@@ -373,7 +360,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
     if (controlsTimer.current) clearTimeout(controlsTimer.current)
     setShowControls(true)
     controlsTimer.current = setTimeout(() => {
-      setShowControls(false)
+      if (!interactionRef.current) setShowControls(false)
     }, 4500)
   }
 
@@ -384,7 +371,15 @@ const PlayerContent = ({ navigation, route }: Props) => {
     }
   }, [])
 
+  const onInteraction = useCallback((active: boolean) => {
+    interactionRef.current = active
+    if (controlsTimer.current) clearTimeout(controlsTimer.current)
+    setShowControls(true)
+    if (!active) controlsTimer.current = setTimeout(() => { if (!interactionRef.current) setShowControls(false) }, 4500)
+  }, [])
+
   const toggleControls = () => {
+    if (interactionRef.current) return
     if (showControls) {
       setShowControls(false)
       if (controlsTimer.current) clearTimeout(controlsTimer.current)
@@ -412,16 +407,12 @@ const PlayerContent = ({ navigation, route }: Props) => {
     }
   }
 
-  const handleScrubberPress = (e: any) => {
-    if (trackWidth > 0 && duration > 0 && player) {
-      const { locationX } = e.nativeEvent
-      const ratio = Math.max(0, Math.min(1, locationX / trackWidth))
-      const targetTime = Math.round(ratio * duration)
-      player.currentTime = targetTime
-      currentTimeRef.current = targetTime
-      setCurrentTime(targetTime)
-      resetControlsTimer()
-    }
+  const handleSeek = (targetTime: number) => {
+    if (!sourceActiveRef.current || duration <= 0 || player.status !== 'readyToPlay') return
+    player.currentTime = Math.max(0, Math.min(duration, targetTime))
+    currentTimeRef.current = player.currentTime
+    setCurrentTime(player.currentTime)
+    resetControlsTimer()
   }
 
   const handleBack = () => {
@@ -464,14 +455,19 @@ const PlayerContent = ({ navigation, route }: Props) => {
           <VideoView
             style={styles.videoPlayer}
             player={player}
-            contentFit="contain"
+            contentFit={playbackSettings.videoFit}
+            onFirstFrameRender={() => {
+              if (!sourceActiveRef.current || firstFrame.current) return
+              firstFrame.current = true
+              setDiagnostics(value => ({ ...value, firstFrameMs: Date.now() - startedAt.current }))
+            }}
             nativeControls={false}
           />
 
           {isBuffering ? (
             <View style={styles.bufferBox}>
               <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.bufferText}>Buffering stream pieces from swarm...</Text>
+              <Text accessibilityLiveRegion="polite" style={styles.bufferText}>{startupStage}</Text>
             </View>
           ) : null}
 
@@ -485,12 +481,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
             </View>
           ) : null}
 
-          {/* Subtitle Overlay */}
-          {activeCue ? (
-            <View style={styles.subtitleContainer}>
-              <Text style={styles.subtitleText}>{activeCue}</Text>
-            </View>
-          ) : null}
+
         </View>
 
         {/* Controls Overlay */}
@@ -511,7 +502,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
               <TouchableOpacity onPress={handleBack} style={styles.iconBtn}>
                 <ArrowLeft size={24} color="#ffffff" />
               </TouchableOpacity>
-              <View style={{ flex: 1, marginLeft: 12 }}>
+              <View style={{ flex: 1, marginLeft: 12, marginRight: 300 }}>
                 <Text style={styles.playerTitle} numberOfLines={1}>
                   {title}
                 </Text>
@@ -520,7 +511,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
                   <View style={styles.healthItem}>
                     <Users size={12} color={colors.success} />
                     <Text style={[styles.healthText, { color: colors.success }]}>
-                      {streamInfo.peers} peers
+                      {streamInfo.peers} connected peers
                     </Text>
                   </View>
                   <View style={styles.healthItem}>
@@ -535,6 +526,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
             <View style={styles.centerControls}>
               <TouchableOpacity
                 style={styles.skipBtn}
+                accessibilityRole="button" accessibilityLabel="Back ten seconds"
                 onPress={() => handleSkip(-10)}
               >
                 <RotateCcw size={28} color="#ffffff" />
@@ -543,6 +535,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
               <TouchableOpacity
                 style={styles.playPauseBtn}
+                accessibilityRole="button" accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
                 onPress={handlePlayPause}
               >
                 {isPlaying ? (
@@ -554,6 +547,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
               <TouchableOpacity
                 style={styles.skipBtn}
+                accessibilityRole="button" accessibilityLabel="Forward ten seconds"
                 onPress={() => handleSkip(10)}
               >
                 <RotateCw size={28} color="#ffffff" />
@@ -564,30 +558,39 @@ const PlayerContent = ({ navigation, route }: Props) => {
             {/* Bottom Scrubber & Time */}
             <View style={styles.bottomBar}>
               <Text style={styles.timeText}>{formatDuration(currentTime)}</Text>
-              {/* Timeline scrubber bar */}
-              <TouchableOpacity
-                style={styles.scrubberTrack}
-                activeOpacity={1}
-                onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-                onPress={handleScrubberPress}
-              >
-                <View
-                  style={[
-                    styles.scrubberFill,
-                    { width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }
-                  ]}
-                />
-              </TouchableOpacity>
+              <SeekBar currentTime={currentTime} duration={duration} onSeek={handleSeek} onInteraction={onInteraction} />
               <Text style={styles.timeText}>{formatDuration(duration)}</Text>
             </View>
           </View>
         ) : null}
       </TouchableOpacity>
+      <TrackControls key={`${session?.sessionId || retryNonce}:${session?.selectedFileIndex ?? -1}`} player={player} session={session} currentTime={currentTime} controlsVisible={showControls} title={title} onOpenChange={onInteraction} />
+      {showControls ? <View style={{ position: 'absolute', top: 20, right: 132, flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Video screen size" onPress={() => { setFitMenu(true); onInteraction(true) }} style={styles.menuButton}><Text style={{ color: '#fff' }}>Screen</Text></TouchableOpacity>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stream information" onPress={() => { setInfoMenu(true); onInteraction(true) }} style={styles.menuButton}><Text style={{ color: '#fff' }}>Info</Text></TouchableOpacity>
+      </View> : null}
+      <Modal visible={infoMenu} transparent supportedOrientations={['landscape', 'portrait']} onRequestClose={() => { setInfoMenu(false); onInteraction(false) }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', padding: 32 }}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 20 }}>Stream information</Text>
+          <Text style={{ color: '#fff', paddingVertical: 16 }}>{streamInfo.peers} connected peers | {streamInfo.speed}{'\n'}Metadata: {diagnostics.metadataMs ? `${(diagnostics.metadataMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}First video data (native session): {streamInfo.firstVideoByteMs ? `${(streamInfo.firstVideoByteMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}Player ready: {diagnostics.sourceMs ? `${(diagnostics.sourceMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}First picture: {diagnostics.firstFrameMs ? `${(diagnostics.firstFrameMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}Buffering events after first picture: {diagnostics.bufferingCount}</Text>
+          <Text style={{ color: colors.textSecondary }}>Reported seeders describe the source listing. Connected peers are the current connections used by this phone.</Text>
+          <TouchableOpacity style={styles.menuButton} onPress={() => { setInfoMenu(false); onInteraction(false) }}><Text style={{ color: '#fff' }}>Done</Text></TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
+      <Modal visible={fitMenu} transparent supportedOrientations={['landscape', 'portrait']} onRequestClose={() => { setFitMenu(false); onInteraction(false) }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', padding: 32 }}>
+          {([['contain', 'Fit — complete picture'], ['cover', 'Fill / crop — edges may be cropped'], ['fill', 'Stretch — picture may look distorted']] as const).map(([value, label]) => <TouchableOpacity key={value} accessibilityRole="button" accessibilityState={{ selected: playbackSettings.videoFit === value }} style={styles.menuButton} onPress={() => { playbackSettings.updateSettings({ videoFit: value }); setFitMenu(false); onInteraction(false) }}><Text style={{ color: '#fff' }}>{label}</Text></TouchableOpacity>)}
+          <TouchableOpacity style={styles.menuButton} onPress={() => { setFitMenu(false); onInteraction(false) }}><Text style={{ color: '#fff' }}>Cancel</Text></TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
+  menuButton: { minHeight: 48, paddingHorizontal: 12, justifyContent: 'center', backgroundColor: colors.surface, borderRadius: 8, marginVertical: 4 },
   container: {
     flex: 1,
     backgroundColor: '#000000'
@@ -621,23 +624,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 12
   },
-  subtitleContainer: {
-    position: 'absolute',
-    bottom: 40,
-    left: 40,
-    right: 40,
-    alignItems: 'center'
-  },
-  subtitleText: {
-    color: '#ffffff',
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center'
-  },
   controlsOverlay: {
     position: 'absolute',
     top: 0,
@@ -653,7 +639,9 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   iconBtn: {
-    padding: 8
+    padding: 8,
+    minHeight: 48,
+    minWidth: 48
   },
   playerTitle: {
     color: '#ffffff',
@@ -703,23 +691,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 8
+    paddingHorizontal: 8,
+    // Reserve the lower caption band used by the native subtitle renderer.
+    marginBottom: 56
   },
   timeText: {
     color: '#ffffff',
     fontSize: 12,
     fontFamily: 'monospace'
-  },
-  scrubberTrack: {
-    flex: 1,
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 2,
-    overflow: 'hidden'
-  },
-  scrubberFill: {
-    height: '100%',
-    backgroundColor: colors.primary
   },
   errorContainer: {
     justifyContent: 'center',

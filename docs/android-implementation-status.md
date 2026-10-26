@@ -1,5 +1,17 @@
 # Android implementation checkpoint — 20 October 2026
 
+## Search/player follow-up — 26 October 2026 (current source)
+
+The user reported successful launch/playback of the first standalone test APK,
+with a slow initial start. Implemented grouped search/posters, larger draggable
+seeking, persisted screen fit modes, included subtitle/audio selection, bounded
+torrent subtitle sidecars, and startup/peer diagnostics. Source validation and
+native library compilation/lifecycle checks passed. These changes have **not**
+been built into a new APK or tested on the phone. Higher peer limits and faster
+startup are not claimed. See
+[implementation evidence and the next phone checks](android-playback-improvements-2026-10-26.md).
+Another APK requires separate explicit user permission.
+
 ## Authorized test build — 26 October 2026
 
 The user explicitly authorized a local test APK, with GitHub updated first.
@@ -11,7 +23,8 @@ phone installation was performed by the build task. GitHub source commit
 `9094913` was confirmed on main before building. `assembleStandaloneTest` succeeded;
 the APK is 52,489,385 bytes, contains bundled production JS and 19 ARM64 native
 libraries, and passes signature, 16 KiB ZIP/ELF alignment, JNI keep-rule and final
-manifest/permission checks. No physical-device behavior is verified yet. See
+manifest/permission checks. The user subsequently reported successful launch and
+playback; the detailed checklist remains pending. See
 [the artifact checksum and test instructions](android-test-build-2026-10-26.md).
 
 ## Device-local scope — 26 October 2026 (current)

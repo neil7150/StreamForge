@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,15 +18,16 @@ import (
 )
 
 type StreamStats struct {
-	InfoHash       string  `json:"infoHash"`
-	Progress       float64 `json:"progress"`
-	DownloadSpeed  int64   `json:"downloadSpeed"`
-	UploadSpeed    int64   `json:"uploadSpeed"`
-	Peers          int     `json:"peers"`
-	Downloaded     int64   `json:"downloaded"`
-	TotalSize      int64   `json:"totalSize"`
-	BufferProgress float64 `json:"bufferProgress"`
-	Error          string  `json:"error,omitempty"`
+	InfoHash         string  `json:"infoHash"`
+	Progress         float64 `json:"progress"`
+	DownloadSpeed    int64   `json:"downloadSpeed"`
+	UploadSpeed      int64   `json:"uploadSpeed"`
+	Peers            int     `json:"peers"`
+	Downloaded       int64   `json:"downloaded"`
+	TotalSize        int64   `json:"totalSize"`
+	BufferProgress   float64 `json:"bufferProgress"`
+	Error            string  `json:"error,omitempty"`
+	FirstVideoByteMs int64   `json:"firstVideoByteMs"`
 }
 
 type SessionInfo struct {
@@ -50,6 +52,8 @@ type streamSession struct {
 	sampled              time.Time
 	downloaded, uploaded int64
 	readers              map[*sessionReader]struct{}
+	started              time.Time
+	firstVideoByteMs     int64
 }
 
 type TorrentEngine struct {
@@ -131,7 +135,7 @@ func (e *TorrentEngine) PrepareSession(id, magnet string, fileIndex, season, epi
 		t.Drop()
 		return nil, err
 	}
-	session := &streamSession{ctx: ctx, cancel: cancel, torrent: t, sampled: time.Now(), readers: make(map[*sessionReader]struct{}), info: SessionInfo{SessionID: id, InfoHash: t.InfoHash().HexString(), SelectedFileIndex: -1, Token: hex.EncodeToString(token), Mode: "stream"}}
+	session := &streamSession{ctx: ctx, cancel: cancel, torrent: t, sampled: time.Now(), started: time.Now(), readers: make(map[*sessionReader]struct{}), info: SessionInfo{SessionID: id, InfoHash: t.InfoHash().HexString(), SelectedFileIndex: -1, Token: hex.EncodeToString(token), Mode: "stream"}}
 	e.sessions[id] = session
 	e.cache.mu.Lock()
 	e.cache.onFailure = cancel
@@ -166,6 +170,8 @@ func (e *TorrentEngine) PrepareSession(id, magnet string, fileIndex, season, epi
 		kind := "other"
 		if isVideo(file.DisplayPath()) {
 			kind = "video"
+		} else if isSubtitle(file.DisplayPath()) {
+			kind = "subtitle"
 		}
 		info.Files = append(info.Files, FileInfo{Index: index, Name: filepath.Base(file.DisplayPath()), Path: file.DisplayPath(), Size: file.Length(), Type: kind})
 	}
@@ -219,14 +225,15 @@ func (e *TorrentEngine) SessionToken(id string) string {
 
 type sessionReader struct {
 	torrent.Reader
-	ioMu     sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
-	stop     func() bool
-	once     sync.Once
-	release  func()
-	window   *cacheWindow
-	position int64
+	ioMu        sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	stop        func() bool
+	once        sync.Once
+	release     func()
+	window      *cacheWindow
+	position    int64
+	onFirstRead func()
 }
 
 func (r *sessionReader) Read(buffer []byte) (int, error) {
@@ -236,6 +243,10 @@ func (r *sessionReader) Read(buffer []byte) (int, error) {
 		return 0, err
 	}
 	n, err := r.Reader.ReadContext(r.ctx, buffer)
+	if n > 0 && r.onFirstRead != nil {
+		r.onFirstRead()
+		r.onFirstRead = nil
+	}
 	r.position += int64(n)
 	if r.window != nil {
 		r.window.move(r.position)
@@ -274,6 +285,23 @@ func (r *sessionReader) Close() error {
 }
 
 func (e *TorrentEngine) OpenReader(id string, request context.Context) (io.ReadSeekCloser, int64, string, error) {
+	return e.openFileReader(id, -1, request)
+}
+
+func isSubtitle(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return ext == ".srt" || ext == ".vtt"
+}
+
+// OpenSubtitleReader exposes only small text sidecars from the active session.
+func (e *TorrentEngine) OpenSubtitleReader(id string, index int, request context.Context) (io.ReadSeekCloser, int64, string, error) {
+	if index < 0 {
+		return nil, 0, "", errors.New("invalid subtitle index")
+	}
+	return e.openFileReader(id, index, request)
+}
+
+func (e *TorrentEngine) openFileReader(id string, index int, request context.Context) (io.ReadSeekCloser, int64, string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session := e.sessions[id]
@@ -283,12 +311,27 @@ func (e *TorrentEngine) OpenReader(id string, request context.Context) (io.ReadS
 	if len(session.readers) >= 4 {
 		return nil, 0, "", errors.New("too many concurrent media readers")
 	}
-	file := session.torrent.Files()[session.info.SelectedFileIndex]
+	files := session.torrent.Files()
+	if index < 0 {
+		index = session.info.SelectedFileIndex
+	} else if index >= len(files) || !isSubtitle(files[index].DisplayPath()) || files[index].Length() <= 0 || files[index].Length() > 2<<20 {
+		return nil, 0, "", errors.New("unsupported or oversized subtitle")
+	}
+	file := files[index]
 	ctx, cancel := context.WithCancel(request)
 	raw := file.NewReader()
 	raw.SetReadahead(readerReadahead)
 	// Keep verified reads; do not expose unverified torrent chunks to the decoder.
 	reader := &sessionReader{Reader: raw, ctx: ctx, cancel: cancel, stop: context.AfterFunc(session.ctx, cancel), window: e.cache.newWindow(file.Offset(), file.Length())}
+	if index == session.info.SelectedFileIndex {
+		reader.onFirstRead = func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if session.firstVideoByteMs == 0 && !session.started.IsZero() {
+				session.firstVideoByteMs = max(1, time.Since(session.started).Milliseconds())
+			}
+		}
+	}
 	reader.release = func() { e.mu.Lock(); delete(session.readers, reader); e.mu.Unlock() }
 	session.readers[reader] = struct{}{}
 	return reader, file.Length(), file.DisplayPath(), nil
@@ -327,6 +370,7 @@ func (e *TorrentEngine) GetStats(id string) (*StreamStats, error) {
 	down, up := stats.BytesReadData.Int64(), stats.BytesWrittenData.Int64()
 	elapsed := time.Since(session.sampled).Seconds()
 	result := &StreamStats{InfoHash: session.info.InfoHash, Peers: stats.ActivePeers, TotalSize: session.info.TotalSize}
+	result.FirstVideoByteMs = session.firstVideoByteMs
 	if elapsed > 0 {
 		result.DownloadSpeed = int64(float64(max(0, down-session.downloaded)) / elapsed)
 		result.UploadSpeed = int64(float64(max(0, up-session.uploaded)) / elapsed)

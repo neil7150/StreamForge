@@ -19,6 +19,14 @@ function showCard(show: SeriesSummary) {
   return { ...show, slug: `tvmaze:${show.id}`, type: 'show' as const,
     poster_url: show.posterUrl, avg_rating: show.rating, imdb_id: show.imdbId }
 }
+export type MobileCatalogItem = ReturnType<typeof movieCard> | ReturnType<typeof showCard>
+
+export function searchSections(items: MobileCatalogItem[]) {
+  return [
+    { title: 'Movies', data: items.filter(item => item.type === 'movie') },
+    { title: 'TV Show', data: items.filter(item => item.type === 'show') }
+  ].filter(section => section.data.length > 0)
+}
 function check(signal?: AbortSignal) { if (signal?.aborted) throw new Error('Catalog request cancelled') }
 
 /** Direct, public metadata only. This adapter has no account/backend API client. */

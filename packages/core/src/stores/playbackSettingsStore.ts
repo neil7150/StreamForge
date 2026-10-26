@@ -16,6 +16,7 @@ export interface PlaybackSettings {
   maxStreamSizeGb: number
   preferredAudioLanguage: string
   preferredSubtitleLanguage: string
+  videoFit: 'contain' | 'cover' | 'fill'
   subtitleMode: SubtitleMode
   autoplayNextEpisode: boolean
   automaticSourceFallback: boolean
@@ -45,6 +46,7 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   maxStreamSizeGb: 0,
   preferredAudioLanguage: '',
   preferredSubtitleLanguage: 'eng',
+  videoFit: 'contain',
   subtitleMode: 'auto',
   autoplayNextEpisode: true,
   automaticSourceFallback: true,
@@ -71,6 +73,7 @@ export function normalizePlaybackSettings(value: unknown): PlaybackSettings {
   }
   if (!['auto', '720p', '1080p', '2160p'].includes(normalized.preferredQuality)) normalized.preferredQuality = 'auto'
   if (!['auto', 'always', 'off'].includes(normalized.subtitleMode)) normalized.subtitleMode = 'auto'
+  if (!['contain', 'cover', 'fill'].includes(normalized.videoFit)) normalized.videoFit = 'contain'
   normalized.minimumSeeders = Math.min(10000, Math.round(normalized.minimumSeeders))
   normalized.smartDownloadCount = Math.min(5, Math.max(1, Math.round(normalized.smartDownloadCount)))
   normalized.torznabEndpoints = Array.isArray(source.torznabEndpoints) ? source.torznabEndpoints
@@ -134,6 +137,7 @@ export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set) => (
       maxStreamSizeGb: Math.max(0, partial.maxStreamSizeGb ?? state.maxStreamSizeGb),
       preferredAudioLanguage: partial.preferredAudioLanguage ?? state.preferredAudioLanguage,
       preferredSubtitleLanguage: partial.preferredSubtitleLanguage ?? state.preferredSubtitleLanguage,
+      videoFit: partial.videoFit ?? state.videoFit,
       subtitleMode: partial.subtitleMode ?? state.subtitleMode,
       autoplayNextEpisode: partial.autoplayNextEpisode ?? state.autoplayNextEpisode,
       automaticSourceFallback: partial.automaticSourceFallback ?? state.automaticSourceFallback,

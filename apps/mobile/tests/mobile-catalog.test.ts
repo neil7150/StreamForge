@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createMobileCatalog, tvmazeSeriesId } from '../src/data/mobile-catalog.ts'
+import { createMobileCatalog, searchSections, tvmazeSeriesId } from '../src/data/mobile-catalog.ts'
 import { CinemetaMovieClient } from '../../../packages/core/src/clients/movie-catalog-client.ts'
 import { TVMazeClient } from '../../../packages/core/src/clients/tvmaze-client.ts'
 
@@ -8,6 +8,18 @@ const movie = {id:'cinemeta:tt12345',title:'Example',year:2020,posterUrl:null,ra
 const movies = {getPopularMovies:async()=>[movie],searchMovies:async()=>[movie],getMovie:async()=>({...movie,summary:'Summary',runtimeMinutes:90,backdropUrl:null,contentRating:null,ytsUrl:null})}
 const show = {id:123,title:'Series',posterUrl:null,year:2020,status:null,network:null,type:null,language:null,genres:['Comedy'],rating:8,summary:null,tvmazeUrl:null,imdbId:null}
 const shows = {getPopularSeries:async()=>[show],searchSeries:async()=>[show]}
+
+test('search sections preserve poster metadata and relevance within each media type', async () => {
+  const catalog = createMobileCatalog({ ...movies, searchMovies: async () => [{ ...movie, posterUrl: 'https://example.com/movie.jpg' }, { ...movie, id: 'cinemeta:tt54321', title: 'Second movie' }] }, shows)
+  const response = await catalog.search('Example')
+  const sections = searchSections(response.data)
+  assert.deepEqual(sections.map(section => section.title), ['Movies', 'TV Show'])
+  assert.deepEqual(sections[0].data.map(item => item.title), ['Example', 'Second movie'])
+  assert.equal(sections[0].data[0].poster_url, 'https://example.com/movie.jpg')
+  assert.equal(sections[1].data[0].poster_url, null)
+  assert.deepEqual(searchSections([]), [])
+  assert.deepEqual(searchSections(response.data.filter(item => item.type === 'show')).map(section => section.title), ['TV Show'])
+})
 
 test('direct catalog preserves provider identities, finite pagination and detail metadata',async()=>{
   const catalog=createMobileCatalog(movies,shows)

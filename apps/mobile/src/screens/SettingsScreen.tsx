@@ -142,7 +142,7 @@ export function SettingsScreen() {
 
         <View style={styles.card}>
           <Text style={styles.settingLabel}>Subtitle Display</Text>
-          <Text style={styles.settingDesc}>Add your OpenSubtitles API key to enable online subtitles.</Text>
+          <Text style={styles.settingDesc}>Use CC / Audio in the player for subtitles included with your video. An OpenSubtitles key is only needed for optional online search.</Text>
           <TextInput
             value={subtitleKey}
             onChangeText={setSubtitleKey}
