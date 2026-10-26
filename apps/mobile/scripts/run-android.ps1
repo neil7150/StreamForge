@@ -80,7 +80,7 @@ if ($AssembleOnly) {
 
   Push-Location $androidDirectory
   try {
-    $assemblyTask = if ($StandaloneTest) { 'assembleStandaloneTest' } elseif ($Release) { 'assembleRelease' } else { 'assembleDebug' }
+    $assemblyTask = if ($Development) { ':app:assembleDebug' } elseif ($StandaloneTest) { 'assembleStandaloneTest' } elseif ($Release) { 'assembleRelease' } else { 'assembleDebug' }
     $assemblyArguments = @($assemblyTask, '-PreactNativeArchitectures=arm64-v8a')
     if ($Development) { $assemblyArguments += @('--no-daemon', '--console=plain', '--max-workers=2') }
     & .\gradlew.bat @assemblyArguments

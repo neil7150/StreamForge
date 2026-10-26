@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { networkInterfaces } from 'node:os'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { mobileRoot, repositoryRoot, requireCurrentDevelopmentBuild } from './native-fingerprint.mjs'
 
+async function main() {
 const require = createRequire(import.meta.url)
 const { toQR } = require('toqr') // Already supplied by the installed Expo CLI.
 const { PNG } = require('pngjs') // Already supplied by Expo's image tooling.
@@ -35,10 +36,29 @@ for (let y = 0; y < png.height; y++) for (let x = 0; x < png.width; x++) {
 writeFileSync(join(artifacts, 'StreamForge-Dev-WiFi-QR.png'), PNG.sync.write(png))
 console.log(`StreamForge Dev — Wi-Fi live testing\n\nPhone and PC must use the same Wi-Fi.\nInstall and open StreamForge Dev, then scan the QR or enter:\n${metroURL}\n\nQR link: ${developmentURL}\n\nKeep this window open. Save UI/JavaScript changes to refresh the phone.\nGo/Kotlin/native changes require a newly authorized development APK.\nPress Ctrl+C to stop the PC development server.\n`)
 if (!process.argv.includes('--connection-only')) {
-  const cli = require.resolve('expo/bin/cli')
-  const child = spawn(process.execPath, [cli, 'start', '--dev-client', '--lan', '--scheme', 'streamforge-dev', '--port', String(port), '--max-workers', '2'], {
-    cwd: mobileRoot, stdio: 'inherit', env: { ...process.env, NODE_ENV: 'development', REACT_NATIVE_PACKAGER_HOSTNAME: host, EXPO_NO_TELEMETRY: '1' }
-  })
-  child.on('error', error => { console.error(error.message); process.exitCode = 1 })
-  child.on('exit', code => { process.exitCode = code ?? 0 })
+  let existing = false
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(5000) })
+    if (!response.ok || (await response.text()).trim() !== 'packager-status:running') throw new Error('Port 8081 is used by another service. Stop that service before launching StreamForge.')
+    const manifestResponse = await fetch(`http://127.0.0.1:${port}/?platform=android`, { headers: { accept: 'application/expo+json', 'expo-platform': 'android', 'expo-protocol-version': '1' }, signal: AbortSignal.timeout(15000) })
+    const manifest = await manifestResponse.json()
+    const project = manifest.extra?.expoClient?._internal?.projectRoot
+    if (!project || resolve(project).toLowerCase() !== resolve(mobileRoot).toLowerCase()) throw new Error('Port 8081 belongs to a different project. Stop that Metro server before starting StreamForge.')
+    existing = true
+  } catch (error) {
+    if (error.name === 'TimeoutError') throw new Error('The existing Metro server is still busy warming up. Keep its original window open and try this launcher again in a moment.')
+    if (error.cause?.code !== 'ECONNREFUSED') throw error
+  }
+  if (existing) console.log('StreamForge Metro is already running. Reuse the QR/URL above; no second server was started. Keep its original server window open.')
+  else {
+    const cli = require.resolve('expo/bin/cli')
+    const child = spawn(process.execPath, [cli, 'start', '--dev-client', '--lan', '--scheme', 'streamforge-dev', '--port', String(port), '--max-workers', '2'], {
+      cwd: mobileRoot, stdio: 'inherit', env: { ...process.env, NODE_ENV: 'development', REACT_NATIVE_PACKAGER_HOSTNAME: host, EXPO_NO_TELEMETRY: '1' }
+    })
+    child.on('error', error => { console.error(error.message); process.exitCode = 1 })
+    child.on('exit', code => { process.exitCode = code ?? 0 })
+  }
 }
+}
+
+main().catch(error => { console.error(`\n${error.message}`); process.exitCode = 1 })

@@ -1,5 +1,16 @@
 # Android implementation checkpoint — 20 October 2026
 
+## Wi-Fi development APK ready — 26 October 2026
+
+Built and artifact-verified `StreamForge Dev` (`com.streamforge.app.dev`,
+`1.0.1-dev`) from pushed source commit `6c468da`. The 102,557,734-byte ARM64
+debugging APK includes the discovery fixes and live-development launcher.
+Metro is running and its Android manifest/JavaScript bundle were verified over
+HTTP. The user chose to keep Wi-Fi Public; the manual restricted firewall helper
+is ready but has not been applied by the assistant. Installation, firewall UAC,
+phone connection and actual Fast Refresh rendering remain user-side checks.
+See [the APK checksum and connection steps](android-wifi-development-2026-10-26.md).
+
 ## Wi-Fi development workflow — 26 October 2026 (setup)
 
 The user authorized switching to a development APK with Wi-Fi live reload.

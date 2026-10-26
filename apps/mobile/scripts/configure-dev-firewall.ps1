@@ -22,6 +22,7 @@ try {
         $rule = Get-NetFirewallRule -Name $entry.name -ErrorAction Stop
         if ($rule.Action.ToString() -ne 'Block' -or $rule.Profile.ToString() -ne 'Public') { throw "The original rule was changed elsewhere. Inspect it before undoing: $($entry.name)" }
         $filter = $rule | Get-NetFirewallPortFilter
+        if (($filter.LocalPort -join ',') -eq ($entry.localPort -join ',')) { continue }
         if (($filter.LocalPort -join ',') -ne '1-8080,8082-65535') { throw "The original port rule changed elsewhere: $($entry.name)" }
         $filter | Set-NetFirewallPortFilter -LocalPort @($entry.localPort) | Out-Null
       }
