@@ -1,5 +1,12 @@
 # Android phone test package — 25 October 2026
 
+26 October update: the user authorized a standalone test APK after GitHub push.
+It has now been built and artifact-verified; see
+[the exact APK/checksum and installation steps](android-test-build-2026-10-26.md).
+The physical tests below are ready for the user to start. They have not passed
+merely because the build succeeded. The earlier "no APK" preparation notes below
+describe the initial checkpoint.
+
 Reference: Nothing Phone 2a Plus, Android 16, 8 GB RAM. Every result below is
 pending until an explicitly authorized APK exists. There is no phone action to
 perform now. A source check, AAR size or JavaScript export is not a phone result.

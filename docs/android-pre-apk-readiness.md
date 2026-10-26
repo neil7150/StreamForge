@@ -1,5 +1,9 @@
 # Pre-APK checkpoint — 25 October 2026
 
+Later update: the user authorized a test APK on 26 October after GitHub push.
+The [standalone test APK is now built and artifact-verified](android-test-build-2026-10-26.md).
+Earlier no-build statements below are historical. Physical-phone results remain pending.
+
 **Current scope, updated 26 October:** device-local Android use without accounts
 or an owned backend. The hosting gates below are historical and do not apply to
 this release. Login/navigation/cloud controls are removed, account background work

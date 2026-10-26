@@ -1,5 +1,11 @@
 # Device-local Android release — 26 October 2026
 
+Later on 26 October, the user authorized the first standalone test APK after a
+GitHub update. It is now built and artifact-verified; see
+[the APK record and phone test instructions](android-test-build-2026-10-26.md).
+The no-build statements in the initial implementation checkpoint below describe
+the state before that explicit permission. Physical-device checks remain pending.
+
 ## Current scope
 
 The user changed the intended architecture to a native phone app without accounts

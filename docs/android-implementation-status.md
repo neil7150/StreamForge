@@ -7,8 +7,12 @@ Prepared a separate `standaloneTest` variant: bundled production JavaScript,
 non-debuggable, optimized ARM64, debug test certificate and `.test` app ID suffix.
 Delivery release signing remains protected; its task guard now distinguishes app
 release packaging from release resources in dependent libraries. No publishing or
-phone installation is authorized by this local build request. Build results will
-be recorded after GitHub push and APK verification.
+phone installation was performed by the build task. GitHub source commit
+`9094913` was confirmed on main before building. `assembleStandaloneTest` succeeded;
+the APK is 52,489,385 bytes, contains bundled production JS and 19 ARM64 native
+libraries, and passes signature, 16 KiB ZIP/ELF alignment, JNI keep-rule and final
+manifest/permission checks. No physical-device behavior is verified yet. See
+[the artifact checksum and test instructions](android-test-build-2026-10-26.md).
 
 ## Device-local scope — 26 October 2026 (current)
 

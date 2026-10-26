@@ -36,8 +36,10 @@ shared Go packages, torrent daemon tests and script syntax checks. It
 does not run Expo prebuild, Gradle assembly, gomobile binding or APK generation.
 
 The updated source requires native protocol 2, AsyncStorage and SecureStore.
-The internal Go library and Kotlin module now compile together; no updated APK
-exists. A separately authorized app build is still needed for device validation.
+The internal Go library and Kotlin module compile together. The first explicitly
+authorized standalone phone-test APK is recorded in
+[the 26 October build record](../../docs/android-test-build-2026-10-26.md).
+Physical-device testing is still pending; future APK builds require authorization.
 
 Library-only native validation from the repository root:
 
