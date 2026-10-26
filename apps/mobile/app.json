@@ -57,9 +57,11 @@
       "expo-secure-store",
       "expo-screen-orientation",
       "expo-video",
+      ["expo-dev-client", { "addGeneratedScheme": false, "launchMode": "most-recent" }],
       "./plugins/with-localhost-cleartext",
       "./plugins/with-android-release",
-      "./plugins/with-android-test-build"
+      "./plugins/with-android-test-build",
+      "./plugins/with-android-development"
     ]
   }
 }

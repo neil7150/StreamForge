@@ -11,7 +11,9 @@
     "android": "powershell -ExecutionPolicy Bypass -File ./scripts/run-android.ps1",
     "build:android": "powershell -ExecutionPolicy Bypass -File ./scripts/run-android.ps1 -AssembleOnly",
     "build:release:android": "powershell -ExecutionPolicy Bypass -File ./scripts/run-android.ps1 -Release -AssembleOnly",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:phone": "node ./scripts/start-dev.mjs",
+    "build:dev:android": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-android.ps1 -AssembleOnly -Development"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -21,6 +23,7 @@
     "@streamforge/core": "*",
     "expo": "^57.0.0",
     "expo-constants": "~57.0.18",
+    "expo-dev-client": "~57.0.20",
     "expo-linking": "~57.0.10",
     "expo-screen-orientation": "~57.0.2",
     "expo-secure-store": "57.0.4",

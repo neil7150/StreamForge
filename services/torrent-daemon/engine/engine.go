@@ -28,6 +28,12 @@ type StreamStats struct {
 	BufferProgress   float64 `json:"bufferProgress"`
 	Error            string  `json:"error,omitempty"`
 	FirstVideoByteMs int64   `json:"firstVideoByteMs"`
+	MetadataReady    bool    `json:"metadataReady"`
+	KnownPeers       int     `json:"knownPeers"`
+	PendingPeers     int     `json:"pendingPeers"`
+	ConnectingPeers  int     `json:"connectingPeers"`
+	ConnectedSeeders int     `json:"connectedSeeders"`
+	ElapsedMs        int64   `json:"elapsedMs"`
 }
 
 type SessionInfo struct {
@@ -66,6 +72,7 @@ type TorrentEngine struct {
 	cancelledIDs      map[string]bool
 	cancelledOrder    []string
 	disposing, closed bool
+	discoveryHints    *DiscoveryHints
 }
 
 var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,80}$`)
@@ -73,6 +80,10 @@ var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,80}$`)
 func CacheDirectory(parent string) string { return filepath.Join(parent, "streamforge-session-cache") }
 
 func NewTorrentEngine(parent string, listenPort int) (*TorrentEngine, error) {
+	return NewTorrentEngineWithHints(parent, listenPort, nil)
+}
+
+func NewTorrentEngineWithHints(parent string, listenPort int, hints *DiscoveryHints) (*TorrentEngine, error) {
 	if parent == "" {
 		parent = os.TempDir()
 	}
@@ -98,7 +109,8 @@ func NewTorrentEngine(parent string, listenPort int) (*TorrentEngine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TorrentEngine{client: client, dataDir: root, cache: cache, sessions: make(map[string]*streamSession)}, nil
+	hints.restore(client.DhtServers(), time.Now())
+	return &TorrentEngine{client: client, dataDir: root, cache: cache, sessions: make(map[string]*streamSession), discoveryHints: hints}, nil
 }
 
 func (e *TorrentEngine) PrepareSession(id, magnet string, fileIndex, season, episode int) (*SessionInfo, error) {
@@ -371,6 +383,14 @@ func (e *TorrentEngine) GetStats(id string) (*StreamStats, error) {
 	elapsed := time.Since(session.sampled).Seconds()
 	result := &StreamStats{InfoHash: session.info.InfoHash, Peers: stats.ActivePeers, TotalSize: session.info.TotalSize}
 	result.FirstVideoByteMs = session.firstVideoByteMs
+	result.MetadataReady = session.torrent.Info() != nil
+	result.KnownPeers = stats.TotalPeers
+	result.PendingPeers = stats.PendingPeers
+	result.ConnectingPeers = stats.HalfOpenPeers
+	result.ConnectedSeeders = stats.ConnectedSeeders
+	if !session.started.IsZero() {
+		result.ElapsedMs = time.Since(session.started).Milliseconds()
+	}
 	if elapsed > 0 {
 		result.DownloadSpeed = int64(float64(max(0, down-session.downloaded)) / elapsed)
 		result.UploadSpeed = int64(float64(max(0, up-session.uploaded)) / elapsed)
@@ -464,6 +484,7 @@ func (e *TorrentEngine) Close() error {
 	for _, id := range ids {
 		e.cancelSession(id)
 	}
+	e.discoveryHints.capture(e.client.DhtServers(), time.Now())
 	e.client.Close()
 	e.cache.Close()
 	return os.RemoveAll(e.dataDir)

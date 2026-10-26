@@ -1,5 +1,27 @@
 # Android implementation checkpoint — 20 October 2026
 
+## Wi-Fi development workflow — 26 October 2026 (setup)
+
+The user authorized switching to a development APK with Wi-Fi live reload.
+Added the SDK-compatible Expo development client, debug-only `.dev` identity and
+launch scheme, LAN networking overlay, two-worker Metro launcher/QR generation,
+and native-input compatibility checks. The user chose to keep Windows Wi-Fi
+Public; a restricted, reversible manual firewall setup helper is prepared rather
+than changing the network trust setting. Existing standalone data stays in its
+separate `.test` installation. Source checks passed with 65 JavaScript tests;
+initial APK and phone connection results are recorded after verification.
+See [the live-testing instructions](../apps/mobile/README.md#wi-fi-live-testing-current-development-workflow).
+
+## Metadata timeout follow-up — 26 October 2026 (source only)
+
+The user reported a Farzi file-list timeout on Wi-Fi and 30s+ startup on other
+sources. Added preparation-stage peer statistics, separate metadata/video UI
+timeout budgets, readable error/recovery UI, native-compatible tracker handling,
+and a tiny expiring in-memory DHT routing-contact cache across engine restarts.
+64 JavaScript tests, TypeScript and Go suites passed. No new APK was generated
+for this follow-up, and the failing public source has not been independently
+reproduced. See [the findings, limits and validation](android-metadata-discovery-2026-10-26.md).
+
 ## Search/player APK delivered — 26 October 2026
 
 The user subsequently authorized the GitHub update and new test build. Source

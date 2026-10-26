@@ -15,12 +15,13 @@ const NETWORK_SECURITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 </network-security-config>
 `
 
-// Android's emulator reaches the host Metro server through this virtual-router
-// address. Keep the extra cleartext exception out of release builds.
-const DEBUG_NETWORK_SECURITY_CONFIG = NETWORK_SECURITY_CONFIG.replace(
-  '  </domain-config>',
-  '    <domain includeSubdomains="false">10.0.2.2</domain>\n  </domain-config>'
-)
+// A phone reaches Metro using the PC's changing LAN address. This exception is
+// confined to debug resources; main/release/standalone-test remain loopback-only.
+const DEBUG_NETWORK_SECURITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
+`
 
 module.exports = function withLocalhostCleartext(config) {
   config = withAndroidManifest(config, (androidConfig) => {

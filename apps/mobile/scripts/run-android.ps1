@@ -2,6 +2,7 @@ param(
   [switch]$AssembleOnly,
   [switch]$Release,
   [switch]$StandaloneTest,
+  [switch]$Development,
   [switch]$AuthorizeApkBuild
 )
 
@@ -9,8 +10,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $AuthorizeApkBuild) {
   throw 'APK generation requires explicit user permission. Pass -AuthorizeApkBuild only after that permission is given.'
 }
-if ($Release -and $StandaloneTest) { throw 'Choose either delivery Release or StandaloneTest, not both.' }
+if (@(@($Release, $StandaloneTest, $Development) | Where-Object { $_.IsPresent }).Count -gt 1) { throw 'Choose one of Release, StandaloneTest or Development.' }
 if ($StandaloneTest -and -not $AssembleOnly) { throw 'StandaloneTest requires -AssembleOnly; this builds a local APK without installing it.' }
+if ($Development -and -not $AssembleOnly) { throw 'Development requires -AssembleOnly; install the resulting development APK manually without USB.' }
 if ($Release) {
   foreach ($signingName in @('STREAMFORGE_KEYSTORE_PATH', 'STREAMFORGE_KEYSTORE_PASSWORD', 'STREAMFORGE_KEY_ALIAS', 'STREAMFORGE_KEY_PASSWORD')) {
     if (-not [Environment]::GetEnvironmentVariable($signingName)) { throw "Required release signing variable is missing: $signingName" }
@@ -43,14 +45,16 @@ if (-not $env:ANDROID_HOME) {
 }
 
 $androidDirectory = Join-Path $mobileDirectory 'android'
-$nativeBindingOptions = @{ StripSymbols = [bool]($Release -or $StandaloneTest) }
+$nativeBindingOptions = @{ StripSymbols = [bool]($Release -or $StandaloneTest -or $Development) }
 & (Join-Path $mobileDirectory '..\..\services\torrent-daemon\build-android-aar.ps1') @nativeBindingOptions
 if ($LASTEXITCODE -ne 0) { throw 'Native torrent binding generation failed.' }
 
 # Apply tracked config plugins to existing generated projects as well.
 Push-Location $mobileDirectory
 try {
-  & npx expo prebuild --platform android --no-install
+  # SDK 57 recreates native folders by default. Preserve compiler outputs while
+  # applying our idempotent tracked plugins; UI/JS testing uses Metro instead.
+  & npx expo prebuild --platform android --no-install --no-clean
   if ($LASTEXITCODE -ne 0) {
     throw "Expo prebuild failed with exit code $LASTEXITCODE"
   }
@@ -77,8 +81,15 @@ if ($AssembleOnly) {
   Push-Location $androidDirectory
   try {
     $assemblyTask = if ($StandaloneTest) { 'assembleStandaloneTest' } elseif ($Release) { 'assembleRelease' } else { 'assembleDebug' }
-    & .\gradlew.bat $assemblyTask '-PreactNativeArchitectures=arm64-v8a'
-    exit $LASTEXITCODE
+    $assemblyArguments = @($assemblyTask, '-PreactNativeArchitectures=arm64-v8a')
+    if ($Development) { $assemblyArguments += @('--no-daemon', '--console=plain', '--max-workers=2') }
+    & .\gradlew.bat @assemblyArguments
+    $assemblyExit = $LASTEXITCODE
+    if ($assemblyExit -eq 0 -and $Development) {
+      & node (Join-Path $PSScriptRoot 'native-fingerprint.mjs') --record
+      if ($LASTEXITCODE -ne 0) { throw 'Development native-build record failed.' }
+    }
+    exit $assemblyExit
   } finally {
     Pop-Location
   }

@@ -29,6 +29,8 @@ import {
   openSubtitlesClient
 } from '@streamforge/core/clients'
 import { extractInfoHash } from '@streamforge/core/utils'
+import { prepareMobileMagnet } from '../data/mobile-magnet'
+import { isUnregisteredPreparingSession, playbackErrorMessage } from '../playback/playback-errors'
 import { PlaybackSessionManager, type SessionInfo } from '../playback/session-manager'
 
 const progressListeners = new Set<(data: TorrentProgress) => void>()
@@ -38,6 +40,7 @@ const errorListeners = new Set<(data: { infoHash: string; error: string }) => vo
 // In-memory active streams for mobile
 const activeStreams = new Map<string, TorrentInfo>()
 const activeSessions = new Map<string, string>()
+const preparingSessions = new Map<string, string>()
 
 const DAEMON_PORT = 8888
 let daemonStartPromise: Promise<string> | null = null
@@ -55,6 +58,12 @@ type NativeTorrentStats = {
   firstVideoByteMs?: number
   bufferProgress?: number
   error?: string
+  metadataReady?: boolean
+  knownPeers?: number
+  pendingPeers?: number
+  connectingPeers?: number
+  connectedSeeders?: number
+  elapsedMs?: number
 }
 
 export const initializeMobileTorrentEngine = async (): Promise<string> => {
@@ -78,6 +87,7 @@ export const shutdownMobileTorrentEngine = async (): Promise<void> => {
   }
   activeStreams.clear()
   activeSessions.clear()
+  preparingSessions.clear()
   daemonStartPromise = null
   if (TorrentDaemon) {
     await TorrentDaemon.stopDaemon()
@@ -105,9 +115,14 @@ const emitProgress = (infoHash: string, stats: NativeTorrentStats) => {
     bufferProgress: stats.bufferProgress ?? 0,
     firstVideoByteMs: stats.firstVideoByteMs ?? 0,
     mode: 'stream',
+    discovery: stats.metadataReady === undefined ? undefined : {
+      metadataReady: stats.metadataReady, knownPeers: stats.knownPeers ?? 0,
+      pendingPeers: stats.pendingPeers ?? 0, connectingPeers: stats.connectingPeers ?? 0,
+      connectedSeeders: stats.connectedSeeders ?? 0, elapsedMs: stats.elapsedMs ?? 0
+    },
     peerConnections: {
-      discovered: connectedPeers,
-      pending: 0,
+      discovered: stats.knownPeers ?? connectedPeers,
+      pending: stats.pendingPeers ?? 0,
       connected: connectedPeers,
       fastTcpFallbacksArmed: 0,
       bySource: {
@@ -133,21 +148,22 @@ const emitProgress = (infoHash: string, stats: NativeTorrentStats) => {
 
 const pollTorrentStats = async () => {
   const daemon = TorrentDaemon
-  if (!daemon || statsPollInFlight || activeStreams.size === 0) return
+  const sessions = new Map([...preparingSessions, ...activeSessions])
+  if (!daemon || statsPollInFlight || sessions.size === 0) return
   statsPollInFlight = true
   try {
-    await Promise.all(Array.from(activeStreams.keys()).map(async (infoHash) => {
-      const sessionId = activeSessions.get(infoHash)
-      if (!sessionId) return
+    await Promise.all(Array.from(sessions).map(async ([infoHash, sessionId]) => {
       try {
         const rawStats = await daemon.getStats(sessionId)
-        if (activeSessions.get(infoHash) !== sessionId) return
+        if ((activeSessions.get(infoHash) ?? preparingSessions.get(infoHash)) !== sessionId) return
         const stats = JSON.parse(rawStats) as NativeTorrentStats
         if (stats.error) throw new Error(stats.error)
         if (stats.infoHash) emitProgress(infoHash, stats)
       } catch (error) {
-        if (activeSessions.get(infoHash) !== sessionId) return
-        const message = error instanceof Error ? error.message : 'Stream statistics are unavailable'
+        // Registration races are expected; storage/engine failures must remain visible.
+        if (preparingSessions.get(infoHash) === sessionId && isUnregisteredPreparingSession(error)) return
+        if ((activeSessions.get(infoHash) ?? preparingSessions.get(infoHash)) !== sessionId) return
+        const message = playbackErrorMessage(error)
         errorListeners.forEach(listener => listener({ infoHash, error: message }))
         void playbackSessions.close().catch(() => {})
       }
@@ -174,14 +190,23 @@ const playbackSessions = new PlaybackSessionManager({
   start: initializeMobileTorrentEngine,
   prepare: async (id, request) => {
     if (!TorrentDaemon) throw new Error('Native torrent module is unavailable')
-    const raw = await TorrentDaemon.prepareSession(id, request.magnetURI, request.fileIndex ?? -1, request.season ?? 0, request.episode ?? 0)
-    const info = JSON.parse(raw) as SessionInfo
-    if (info.sessionId !== id || !Array.isArray(info.files)) throw new Error('Invalid native session response')
-    registerSession(info)
-    return info
+    const hash = extractInfoHash(request.magnetURI)!
+    preparingSessions.set(hash, id)
+    updateStatsPolling()
+    try {
+      const raw = await TorrentDaemon.prepareSession(id, request.magnetURI, request.fileIndex ?? -1, request.season ?? 0, request.episode ?? 0)
+      const info = JSON.parse(raw) as SessionInfo
+      if (info.sessionId !== id || !Array.isArray(info.files)) throw new Error('Invalid native session response')
+      registerSession(info)
+      return info
+    } finally {
+      if (preparingSessions.get(hash) === id) preparingSessions.delete(hash)
+      updateStatsPolling()
+    }
   },
   cancel: async id => {
     await TorrentDaemon?.cancelSession(id)
+    for (const [hash, session] of preparingSessions) { if (session === id) preparingSessions.delete(hash) }
     for (const [hash, session] of activeSessions) {
       if (session === id) { activeSessions.delete(hash); activeStreams.delete(hash) }
     }
@@ -192,7 +217,7 @@ const playbackSessions = new PlaybackSessionManager({
 
 export const beginMobilePlayback = (magnetURI: string, preferred?: PreferredEpisodeFile) => {
   if (!extractInfoHash(magnetURI)) throw new Error('Invalid magnet link: missing info hash')
-  return playbackSessions.open({ magnetURI, fileIndex: preferred?.fileIndex, season: preferred?.seasonNumber, episode: preferred?.episodeNumber })
+  return playbackSessions.open({ magnetURI: prepareMobileMagnet(magnetURI), fileIndex: preferred?.fileIndex, season: preferred?.seasonNumber, episode: preferred?.episodeNumber })
 }
 
 export async function selectMobileFile(sessionId: string, fileIndex: number): Promise<SessionInfo> {
@@ -205,7 +230,7 @@ export async function selectMobileFile(sessionId: string, fileIndex: number): Pr
 }
 
 const updateStatsPolling = () => {
-  const shouldPoll = progressListeners.size > 0 && activeStreams.size > 0
+  const shouldPoll = progressListeners.size > 0 && (activeStreams.size > 0 || preparingSessions.size > 0)
   if (shouldPoll && !statsTimer) {
     void pollTorrentStats()
     statsTimer = setInterval(() => void pollTorrentStats(), 1000)

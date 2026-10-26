@@ -204,6 +204,14 @@ export interface MovieDetails extends MovieSummary {
 }
 
 export interface TorrentProgress {
+  discovery?: {
+    metadataReady: boolean
+    knownPeers: number
+    pendingPeers: number
+    connectingPeers: number
+    connectedSeeders: number
+    elapsedMs: number
+  }
   firstVideoByteMs?: number
   infoHash: string
   progress: number

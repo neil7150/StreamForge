@@ -6,6 +6,55 @@ and library/preferences are handled on the phone. Internet is still required for
 online metadata/source discovery and peers. See
 [current architecture and pending tests](../../docs/android-local-first.md).
 
+## Wi-Fi live testing (current development workflow)
+
+Install the separately identified **StreamForge Dev** APK once, then run
+`npm run dev:phone --workspace=apps/mobile` from the repository root, or
+double-click `apps/mobile/scripts/start-dev.cmd`. Keep the terminal open and put
+the PC and phone on the same Wi-Fi. Open StreamForge Dev and scan the generated
+QR, or enter the printed `http://<PC-LAN-IP>:8081` in its development launcher.
+No USB, Expo account, app account, hosted backend or cloud build is required.
+The development app uses `com.streamforge.app.dev`, has its own local data, and
+does not replace the existing standalone `com.streamforge.app.test` app.
+
+Saving UI/JavaScript changes uses Metro/Fast Refresh. Source tests and library
+tests still run without an APK. Go/Kotlin, native dependency and Android config
+changes require an explicitly authorized new development APK. The launcher checks
+a native-input fingerprint and refuses stale native builds; ordinary UI edits
+and unrelated desktop dependency changes do not invalidate it. An initial or
+updated development APK, after explicit permission, is built with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File apps/mobile/scripts/run-android.ps1 -AssembleOnly -Development -AuthorizeApkBuild
+```
+
+The build records `.expo/dev-native-build.json`. The launcher refreshes
+`.expo/dev-connection.json` and `.cache/artifacts/StreamForge-Dev-WiFi-QR.png` each
+time, so it can handle a changed PC LAN address. `STREAMFORGE_DEV_HOST` may select
+another IPv4 address already assigned to this PC. The normal workflow does not
+use a public tunnel. Ctrl+C stops the live server.
+
+For this PC, Windows currently treats the Wi-Fi as Public and has explicit Public
+Node.js blocks. The user chose to keep that profile. Run
+`apps/mobile/scripts/allow-dev-wifi.cmd` once and accept its administrator prompt
+to configure the restricted Wi-Fi/LocalSubnet TCP 8081 exception. It saves the
+original blocking-port filters, excludes only TCP 8081 from the explicit TCP
+block, leaves UDP/other TCP ports blocked, and adds the narrow allow rule.
+`undo-dev-wifi.cmd` restores the saved port filters and removes the exception.
+These are manually run setup helpers; builds, source tests and Metro startup
+never change Windows firewall settings or the network profile automatically.
+
+The debug-only resource overlay permits LAN HTTP for Metro and registers the
+unique `streamforge-dev` QR scheme. Release and standalone-test builds retain
+their loopback-only cleartext policy, signing restrictions and storage/overlay
+permission blocks. Development tools are for iteration; evaluate final startup,
+size, heat and memory on a later optimized standalone APK. A development APK can
+be larger and slower than that optimized build.
+
+Expo SDK 57 recreates native folders by default. The runner uses `--no-clean`
+when applying tracked, idempotent plugins, retaining native compiler outputs.
+Do not prebuild or assemble for an ordinary JS edit.
+
 ## Current build restriction
 
 An authorized standalone phone-test build uses:

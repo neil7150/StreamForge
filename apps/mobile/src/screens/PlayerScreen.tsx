@@ -33,6 +33,7 @@ import { SeekBar } from '../components/player/SeekBar'
 import { mobileTorrentAPI, beginMobilePlayback, selectMobileFile } from '../native/torrent-engine'
 import type { PlaybackAttempt, SessionInfo } from '../playback/session-manager'
 import { flushMobileStorage } from '../storage/mobile-storage'
+import { bufferingTimeoutMessage, playbackErrorMessage } from '../playback/playback-errors'
 import { acceptsPlayerStatus } from '../playback/player-event-policy'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Player'>
@@ -79,6 +80,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const attemptRef = useRef<PlaybackAttempt | null>(null)
   const sourceOwnerRef = useRef<PlaybackAttempt | null>(null)
   const sourceActiveRef = useRef(false)
+  const nativeFailureRef = useRef(false)
   const selectedFileRef = useRef(fileIndex)
   const resumePendingRef = useRef(initialTime || 0)
   const accountGenerationRef = useRef(getAuthGeneration())
@@ -90,6 +92,8 @@ const PlayerContent = ({ navigation, route }: Props) => {
   const [fitMenu, setFitMenu] = useState(false)
   const [infoMenu, setInfoMenu] = useState(false)
   const interactionRef = useRef(false)
+  const [startupPhase, setStartupPhase] = useState<'metadata' | 'video'>('metadata')
+  const [discovery, setDiscovery] = useState({ knownPeers: 0, pendingPeers: 0, connectingPeers: 0, connectedSeeders: 0, elapsedMs: 0 })
   const [startupStage, setStartupStage] = useState('Discovering torrent metadata…')
   const startedAt = useRef(0)
   const [diagnostics, setDiagnostics] = useState({ metadataMs: 0, sourceMs: 0, firstFrameMs: 0, bufferingCount: 0 })
@@ -154,12 +158,12 @@ const PlayerContent = ({ navigation, route }: Props) => {
     if (!isBuffering || fileChoice) return
     const timeout = setTimeout(() => {
       player.pause()
-      setPlaybackError('The stream did not provide video data. Retry or choose another source.')
+      setPlaybackError(bufferingTimeoutMessage(startupPhase))
       setIsBuffering(false)
       void attemptRef.current?.close().catch(() => {})
     }, 60_000)
     return () => clearTimeout(timeout)
-  }, [isBuffering, player, retryNonce, fileChoice])
+  }, [isBuffering, player, retryNonce, fileChoice, startupPhase])
 
   // A unique attempt owns setup and cleanup, including retries of the same URL.
   useEffect(() => {
@@ -167,10 +171,13 @@ const PlayerContent = ({ navigation, route }: Props) => {
     let attempt: PlaybackAttempt | null = null
     sourceActiveRef.current = false
     sourceOwnerRef.current = null
+    nativeFailureRef.current = false
     startedAt.current = Date.now(); firstFrame.current = false
     setStreamInfo({ firstVideoByteMs: 0, peers: 0, speed: '0.0 MiB/s', buffered: 0 })
     setDiagnostics({ metadataMs: 0, sourceMs: 0, firstFrameMs: 0, bufferingCount: 0 })
     setStartupStage(isDirectStream ? 'Opening video…' : 'Discovering torrent metadata…')
+    setStartupPhase(isDirectStream ? 'video' : 'metadata')
+    setDiscovery({ knownPeers: 0, pendingPeers: 0, connectingPeers: 0, connectedSeeders: 0, elapsedMs: 0 })
     setSession(null)
     setPlaybackError(null)
     setFileChoice(null)
@@ -179,6 +186,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
 
     const load = async (url: string) => {
       sourceOwnerRef.current = attempt
+      setStartupPhase('video')
       setStartupStage('Fetching video data and preparing playback…')
       await player.replaceAsync(url)
       if (!active) return
@@ -214,17 +222,20 @@ const PlayerContent = ({ navigation, route }: Props) => {
     }
     void resolve().catch(error => {
       if (active) {
-        setPlaybackError(error instanceof Error ? error.message : 'Unable to start playback'); setIsBuffering(false)
+        if (!nativeFailureRef.current) setPlaybackError(playbackErrorMessage(error))
+        setIsBuffering(false)
         void attempt?.close().catch(() => {})
       }
     })
     const progress = mobileTorrentAPI.onTorrentProgress(data => {
+      if (active && data.infoHash === infoHash && data.discovery) setDiscovery(data.discovery)
       if (active && data.infoHash === infoHash) setStreamInfo({
         firstVideoByteMs: data.firstVideoByteMs ?? 0, peers: data.numPeers, speed: `${(data.downloadSpeed / (1024 * 1024)).toFixed(1)} MiB/s`, buffered: data.progress
       })
     })
     const errors = mobileTorrentAPI.onTorrentError(data => {
       if (active && data.infoHash === infoHash) {
+        nativeFailureRef.current = true
         player.pause(); setPlaybackError(data.error); setIsBuffering(false)
       }
     })
@@ -255,6 +266,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
     try {
       const info = await selectMobileFile(attempt.id, index)
       if (attemptRef.current !== attempt) return
+      setStartupPhase('video')
       setSession(info)
       selectedFileRef.current = index
       sourceOwnerRef.current = attempt
@@ -267,7 +279,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
       if (AppState.currentState === 'active') player.play()
     } catch (error) {
       if (attemptRef.current === attempt) {
-        setPlaybackError(error instanceof Error ? error.message : 'Unable to select this file')
+        setPlaybackError(playbackErrorMessage(error))
         setIsBuffering(false)
       }
     }
@@ -468,6 +480,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
             <View style={styles.bufferBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text accessibilityLiveRegion="polite" style={styles.bufferText}>{startupStage}</Text>
+              {startupPhase === 'metadata' ? <Text style={styles.bufferText}>{discovery.knownPeers} known peers | {streamInfo.peers} connected | {discovery.connectingPeers} connecting</Text> : null}
             </View>
           ) : null}
 
@@ -478,6 +491,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
               <TouchableOpacity style={styles.errorButton} onPress={retryPlayback}>
                 <Text style={styles.errorButtonText}>Retry</Text>
               </TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" style={styles.errorButton} onPress={handleBack}><Text style={styles.errorButtonText}>Choose another source</Text></TouchableOpacity>
             </View>
           ) : null}
 
@@ -573,7 +587,7 @@ const PlayerContent = ({ navigation, route }: Props) => {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', padding: 32 }}>
           <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
           <Text style={{ color: '#fff', fontSize: 20 }}>Stream information</Text>
-          <Text style={{ color: '#fff', paddingVertical: 16 }}>{streamInfo.peers} connected peers | {streamInfo.speed}{'\n'}Metadata: {diagnostics.metadataMs ? `${(diagnostics.metadataMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}First video data (native session): {streamInfo.firstVideoByteMs ? `${(streamInfo.firstVideoByteMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}Player ready: {diagnostics.sourceMs ? `${(diagnostics.sourceMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}First picture: {diagnostics.firstFrameMs ? `${(diagnostics.firstFrameMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}Buffering events after first picture: {diagnostics.bufferingCount}</Text>
+          <Text style={{ color: '#fff', paddingVertical: 16 }}>{streamInfo.peers} connected peers | {streamInfo.speed}{'\n'}Known peers: {discovery.knownPeers} | Connecting: {discovery.connectingPeers} | Connected seeders: {discovery.connectedSeeders}{'\n'}Metadata: {diagnostics.metadataMs ? `${(diagnostics.metadataMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}First video data (native session): {streamInfo.firstVideoByteMs ? `${(streamInfo.firstVideoByteMs / 1000).toFixed(1)}s` : 'pending / not applicable'}{'\n'}Player ready: {diagnostics.sourceMs ? `${(diagnostics.sourceMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}First picture: {diagnostics.firstFrameMs ? `${(diagnostics.firstFrameMs / 1000).toFixed(1)}s` : 'pending'}{'\n'}Buffering events after first picture: {diagnostics.bufferingCount}</Text>
           <Text style={{ color: colors.textSecondary }}>Reported seeders describe the source listing. Connected peers are the current connections used by this phone.</Text>
           <TouchableOpacity style={styles.menuButton} onPress={() => { setInfoMenu(false); onInteraction(false) }}><Text style={{ color: '#fff' }}>Done</Text></TouchableOpacity>
           </ScrollView>

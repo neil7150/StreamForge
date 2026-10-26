@@ -17,6 +17,7 @@ var (
 	serverInstance *server.StreamServer
 	bridgeMu       sync.Mutex
 	serverPort     = 8888
+	discoveryHints = engine.NewDiscoveryHints()
 )
 
 func StartDaemon(cacheDir string, port int) string {
@@ -28,7 +29,7 @@ func StartDaemon(cacheDir string, port int) string {
 	if port > 0 {
 		serverPort = port
 	}
-	eng, err := engine.NewTorrentEngine(cacheDir, 0)
+	eng, err := engine.NewTorrentEngineWithHints(cacheDir, 0, discoveryHints)
 	if err != nil {
 		return fmt.Sprintf("ERROR: %v", err)
 	}
@@ -128,6 +129,7 @@ func ClearCache(cacheDir string) string {
 	if engInstance != nil {
 		return "ERROR: stop playback before clearing the stream cache"
 	}
+	discoveryHints.Clear()
 	if err := os.RemoveAll(engine.CacheDirectory(cacheDir)); err != nil {
 		return fmt.Sprintf("ERROR: %v", err)
 	}
